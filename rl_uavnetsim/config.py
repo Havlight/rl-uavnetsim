@@ -1,0 +1,126 @@
+"""Global configuration for the v1 step-based rl_uavnetsim prototype."""
+
+from __future__ import annotations
+
+# ---- Simulation ----
+MAP_LENGTH = 2000.0
+MAP_WIDTH = 2000.0
+UAV_HEIGHT = 100.0
+SIM_STEPS = 200
+DELTA_T = 1.0
+NUM_SLOTS_PER_STEP = 10
+SLOT_DURATION = DELTA_T / NUM_SLOTS_PER_STEP
+
+# ---- Entities ----
+NUM_UAVS = 5
+NUM_USERS = 60
+NUM_SATS = 1
+NUM_GBS = 1
+ANCHOR_UAV_ID = 0
+
+# ---- Traffic ----
+USER_DEMAND_RATE_BPS = 0.5e6
+
+# ---- UAV Mobility ----
+V_MAX = 20.0
+R_MAX = V_MAX * DELTA_T
+D_SAFE = 30.0
+
+# ---- Ground User Mobility ----
+MOBILITY_MODEL = "random_walk"
+USER_SPEED_MEAN = 2.0
+USER_SPEED_MAX = 8.0
+USER_DIR_SIGMA = 0.5
+
+# ---- RF Parameters (UAV-GU Access Link) ----
+P_TX_RF = 0.5
+ALPHA_LOS = 1.0
+ALPHA_NLOS = 20.0
+BETA_LOS = 2.09
+BETA_NLOS = 3.75
+A_ENV = 4.88
+B_ENV = 0.429
+SHADOW_STD = 0.0
+CARRIER_FREQ = 2.4e9
+LIGHT_SPEED = 3e8
+
+# ---- Sub-channel ----
+NUM_SUBCHANNELS = 8
+SUBCHANNEL_BW = 1e6
+
+# ---- Noise Power ----
+N0 = 4e-21
+NF_ACCESS = 7.0
+NF_A2A = 5.0
+NF_SAT = 3.0
+NF_GBS = 5.0
+A2A_BW = 10e6
+
+# ---- SINR & Rate ----
+SINR_THRESHOLD_DB = 3.0
+R_MIN = 0.5e6
+
+# ---- UAV-UAV Relay Link ----
+P_TX_UAV = 1.0
+RHO_0 = 1e-4
+GAMMA_TH_DB = 10.0
+GAMMA_TH = GAMMA_TH_DB
+
+# ---- Backhaul ----
+BACKHAUL_TYPE = "satellite"
+SAT_ALTITUDE = 550e3
+SAT_POSITION = [1000.0, 1000.0, SAT_ALTITUDE]
+B_SAT = 20e6
+GBS_POSITIONS = [[100.0, 100.0, 0.0]]
+GBS_BW = 50e6
+G_TX = 10.0
+G_RX = 30.0
+L_ATM = 2.0
+G_TX_DB = G_TX
+G_RX_SAT_DB = G_RX
+G_RX_GBS_DB = 0.0
+L_ATM_DB = L_ATM
+
+# ---- PF ----
+PF_ALPHA_DEFAULT = 1.0
+PF_BETA = 0.01
+PF_EPSILON = 1e-6
+
+# ---- Observation ----
+OBS_RADIUS = 500.0
+MAX_OBS_USERS_PAD = 30
+
+# ---- Energy ----
+ENERGY_MODEL = "simplified"
+E_INITIAL = 50000.0
+E_MIN = 2000.0
+E_HOVER = 200.0
+E_FLY = 5.0
+
+# ---- UAV Hardware (Zeng2019 model) ----
+PROFILE_DRAG_COEFFICIENT = 0.012
+AIR_DENSITY = 1.225
+ROTOR_SOLIDITY = 0.05
+ROTOR_DISC_AREA = 0.79
+BLADE_ANGULAR_VELOCITY = 400.0
+ROTOR_RADIUS = 0.5
+INCREMENTAL_CORRECTION_FACTOR = 0.1
+AIRCRAFT_WEIGHT = 100.0
+ROTOR_BLADE_TIP_SPEED = 500.0
+MEAN_ROTOR_VELOCITY = 7.2
+FUSELAGE_DRAG_RATIO = 0.3
+
+# ---- Reward normalization ----
+ETA = 0.1
+MU = 1.0
+BETA_ACCESS = 0.2
+BETA_RELAY = 0.2
+LAMBDA_CONN = 5.0
+LAMBDA_SAFE = 2.0
+THROUGHPUT_REF_BITS = NUM_USERS * R_MIN * DELTA_T
+ENERGY_REF_J = NUM_UAVS * E_HOVER * DELTA_T
+ACCESS_BACKLOG_REF_BITS = NUM_USERS * USER_DEMAND_RATE_BPS * DELTA_T
+RELAY_QUEUE_REF_BITS = NUM_USERS * USER_DEMAND_RATE_BPS * DELTA_T
+
+# ---- Numeric stability ----
+EPSILON = 1e-12
