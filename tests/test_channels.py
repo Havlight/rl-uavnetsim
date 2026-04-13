@@ -56,6 +56,14 @@ def test_a2a_capacity_decreases_with_distance() -> None:
     assert isinstance(a2a_link_is_active(anchor_position, near_member_position), bool)
 
 
+def test_a2a_link_is_active_respects_max_range_cap() -> None:
+    source_position = np.array([0.0, 0.0, 100.0])
+    target_position = np.array([config.MAX_RELAY_RANGE_M + 50.0, 0.0, 100.0])
+
+    assert a2a_snr_db(source_position, target_position) > config.GAMMA_TH_DB
+    assert a2a_link_is_active(source_position, target_position) is False
+
+
 def test_satellite_and_gbs_backhaul_entities_are_usable() -> None:
     anchor_position = np.array([100.0, 100.0, config.UAV_HEIGHT])
     satellite = Satellite(id=0)

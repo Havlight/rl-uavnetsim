@@ -89,3 +89,52 @@ def test_metrics_collector_and_plotters_generate_outputs(tmp_path: Path) -> None
     assert metrics_png_path.exists() and metrics_png_path.stat().st_size > 0
     assert frame_png_path.exists() and frame_png_path.stat().st_size > 0
     assert gif_path.exists() and gif_path.stat().st_size > 0
+
+
+def test_visualization_frame_tracks_gateway_ids_from_env_state() -> None:
+    gateway = UAV(
+        id=0,
+        position=np.array([0.0, 0.0, config.UAV_HEIGHT]),
+        velocity=np.zeros(2),
+        speed=0.0,
+        direction=0.0,
+        is_gateway_capable=True,
+    )
+    relay = UAV(
+        id=1,
+        position=np.array([50.0, 0.0, config.UAV_HEIGHT]),
+        velocity=np.zeros(2),
+        speed=0.0,
+        direction=0.0,
+    )
+    user = GroundUser(
+        id=9,
+        position=np.array([40.0, 0.0, 0.0]),
+        velocity=np.zeros(2),
+        speed=0.0,
+        demand_rate_bps=1_000.0,
+        user_access_backlog_bits=1_000.0,
+    )
+    satellite = Satellite(id=0)
+    env = SimEnv(
+        uavs=[gateway, relay],
+        users=[user],
+        satellites=[satellite],
+        gateway_capable_uav_ids=[gateway.id],
+        backhaul_type="satellite",
+    )
+    step_result = env.step(
+        relay_capacity_matrix_bps=np.array([[0.0, 2000.0], [2000.0, 0.0]], dtype=float),
+        backhaul_capacity_bps_override=1000.0,
+    )
+
+    frame = build_visualization_frame(
+        step_result,
+        env.uavs,
+        env.users,
+        gateway_uav_ids=step_result.env_state.active_gateway_uav_ids,
+        backhaul_type="satellite",
+        backhaul_node_position=satellite.position,
+    )
+
+    assert frame.gateway_uav_ids == step_result.env_state.active_gateway_uav_ids

@@ -19,11 +19,11 @@ class UAV:
     speed: float
     direction: float
     is_anchor: bool = False
+    is_gateway_capable: bool = False
     residual_energy_j: float = config.E_INITIAL
     associated_user_ids: list[int] = field(default_factory=list)
     access_ingress_bits_step: float = 0.0
     relay_queue_bits_by_user: dict[int, float] = field(default_factory=dict)
-    relay_queue_total_bits: float = 0.0
     relay_forwarded_bits_step: float = 0.0
     backhaul_forwarded_bits_step: float = 0.0
     energy_model: Optional[EnergyModelBase] = None
@@ -34,7 +34,8 @@ class UAV:
         self.speed = float(self.speed)
         self.direction = float(self.direction)
         self.residual_energy_j = float(self.residual_energy_j)
-        self.refresh_relay_queue_total_bits()
+        if self.is_anchor and not self.is_gateway_capable:
+            self.is_gateway_capable = True
 
     def reset_step_counters(self) -> None:
         self.associated_user_ids = []
@@ -42,8 +43,11 @@ class UAV:
         self.relay_forwarded_bits_step = 0.0
         self.backhaul_forwarded_bits_step = 0.0
 
+    @property
+    def relay_queue_total_bits(self) -> float:
+        return float(sum(self.relay_queue_bits_by_user.values()))
+
     def refresh_relay_queue_total_bits(self) -> float:
-        self.relay_queue_total_bits = float(sum(self.relay_queue_bits_by_user.values()))
         return self.relay_queue_total_bits
 
     def enqueue_relay_bits(
@@ -59,7 +63,6 @@ class UAV:
         self.relay_queue_bits_by_user[user_id] = self.relay_queue_bits_by_user.get(user_id, 0.0) + bits
         if count_as_access_ingress:
             self.access_ingress_bits_step += bits
-        self.refresh_relay_queue_total_bits()
         return bits
 
     def proportional_dequeue(self, service_budget_bits: float) -> dict[int, float]:
@@ -81,7 +84,6 @@ class UAV:
                 self.relay_queue_bits_by_user[user_id] = remaining_bits
             forwarded_bits_by_user[user_id] = forwarded_bits
 
-        self.refresh_relay_queue_total_bits()
         return forwarded_bits_by_user
 
     def register_relay_forwarded_bits(self, forwarded_bits: float) -> float:

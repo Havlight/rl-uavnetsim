@@ -65,6 +65,8 @@ P_TX_UAV = 1.0
 RHO_0 = 1e-4
 GAMMA_TH_DB = 10.0
 GAMMA_TH = GAMMA_TH_DB
+MAX_RELAY_RANGE_M = 1000.0
+FADE_MARGIN_DB = 0.0
 
 # ---- Backhaul ----
 BACKHAUL_TYPE = "satellite"
@@ -80,6 +82,8 @@ G_TX_DB = G_TX
 G_RX_SAT_DB = G_RX
 G_RX_GBS_DB = 0.0
 L_ATM_DB = L_ATM
+GBS_BACKHAUL_SNR_THRESHOLD_DB = 3.0
+MAX_GBS_RANGE_M = 1500.0
 
 # ---- PF ----
 PF_ALPHA_DEFAULT = 1.0
@@ -89,6 +93,8 @@ PF_EPSILON = 1e-6
 # ---- Observation ----
 OBS_RADIUS = 500.0
 MAX_OBS_USERS_PAD = 30
+SELF_OBS_DIM = 12
+OBS_DIM = SELF_OBS_DIM + 4 * (NUM_UAVS - 1) + 3 * MAX_OBS_USERS_PAD
 
 # ---- Energy ----
 ENERGY_MODEL = "simplified"

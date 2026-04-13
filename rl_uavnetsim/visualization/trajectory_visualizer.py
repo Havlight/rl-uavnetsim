@@ -33,9 +33,14 @@ class VisualizationFrame:
     relay_out_bits_by_uav: np.ndarray
     backhaul_capacity_bps: float
     total_delivered_bits_step: float
-    anchor_uav_id: int
+    gateway_uav_ids: tuple[int, ...]
+    gateway_capable_uav_ids: tuple[int, ...]
     backhaul_type: str | None = None
     backhaul_node_position: np.ndarray | None = None
+
+    @property
+    def anchor_uav_id(self) -> int:
+        return int(self.gateway_uav_ids[0]) if self.gateway_uav_ids else -1
 
 
 def build_visualization_frame(
@@ -43,10 +48,23 @@ def build_visualization_frame(
     uavs: Sequence[UAV],
     users: Sequence[GroundUser],
     *,
-    anchor_uav_id: int = config.ANCHOR_UAV_ID,
+    gateway_uav_ids: Sequence[int] | None = None,
+    anchor_uav_id: int | None = None,
     backhaul_type: str | None = None,
     backhaul_node_position: np.ndarray | None = None,
 ) -> VisualizationFrame:
+    resolved_gateway_uav_ids = tuple(
+        int(gateway_uav_id)
+        for gateway_uav_id in (
+            gateway_uav_ids
+            if gateway_uav_ids is not None
+            else (
+                step_result.env_state.active_gateway_uav_ids
+                if step_result.env_state.active_gateway_uav_ids
+                else (() if anchor_uav_id is None else (int(anchor_uav_id),))
+            )
+        )
+    )
     uav_ids = [uav.id for uav in uavs]
     user_ids = [user.id for user in users]
     access_uploaded_bits_by_user = np.asarray(
@@ -72,7 +90,10 @@ def build_visualization_frame(
         relay_out_bits_by_uav=relay_out_bits_by_uav,
         backhaul_capacity_bps=float(step_result.env_state.backhaul_capacity_bps),
         total_delivered_bits_step=float(step_result.env_state.total_delivered_bits_step),
-        anchor_uav_id=int(anchor_uav_id),
+        gateway_uav_ids=resolved_gateway_uav_ids,
+        gateway_capable_uav_ids=tuple(
+            sorted(uav.id for uav in uavs if uav.is_gateway_capable)
+        ),
         backhaul_type=backhaul_type,
         backhaul_node_position=None if backhaul_node_position is None else np.asarray(backhaul_node_position, dtype=float),
     )
@@ -149,8 +170,14 @@ class TrajectoryVisualizer:
 
         for uav_index, uav_id in enumerate(current_frame.uav_ids):
             trajectory = trajectory_by_uav_id[uav_id]
-            is_anchor = uav_id == current_frame.anchor_uav_id
-            color = "crimson" if is_anchor else plt.cm.cividis(min(uav_queue_norm[uav_index], 1.0))
+            is_active_gateway = uav_id in current_frame.gateway_uav_ids
+            is_gateway_capable = uav_id in current_frame.gateway_capable_uav_ids
+            if is_active_gateway:
+                color = "crimson"
+            elif is_gateway_capable:
+                color = "darkorange"
+            else:
+                color = plt.cm.cividis(min(uav_queue_norm[uav_index], 1.0))
             axis.plot(trajectory[:, 0], trajectory[:, 1], trajectory[:, 2], color=color, linewidth=2.0, alpha=0.85)
             axis.scatter(
                 [trajectory[-1, 0]],
@@ -204,16 +231,19 @@ class TrajectoryVisualizer:
                     alpha=0.5,
                 )
 
-        if current_frame.backhaul_node_position is not None and current_frame.anchor_uav_id in uav_id_to_index:
-            anchor_index = uav_id_to_index[current_frame.anchor_uav_id]
+        if current_frame.backhaul_node_position is not None:
             backhaul_norm = current_frame.backhaul_capacity_bps / max(config.THROUGHPUT_REF_BITS / config.DELTA_T, config.EPSILON)
-            axis.plot(
-                [current_frame.uav_positions[anchor_index, 0], current_frame.backhaul_node_position[0]],
-                [current_frame.uav_positions[anchor_index, 1], current_frame.backhaul_node_position[1]],
-                [current_frame.uav_positions[anchor_index, 2], current_frame.backhaul_node_position[2]],
-                color="tab:purple",
-                linewidth=1.0 + 4.0 * min(backhaul_norm, 1.0),
-                alpha=0.6,
-            )
+            for gateway_uav_id in current_frame.gateway_uav_ids:
+                if gateway_uav_id not in uav_id_to_index:
+                    continue
+                gateway_index = uav_id_to_index[gateway_uav_id]
+                axis.plot(
+                    [current_frame.uav_positions[gateway_index, 0], current_frame.backhaul_node_position[0]],
+                    [current_frame.uav_positions[gateway_index, 1], current_frame.backhaul_node_position[1]],
+                    [current_frame.uav_positions[gateway_index, 2], current_frame.backhaul_node_position[2]],
+                    color="tab:purple",
+                    linewidth=1.0 + 4.0 * min(backhaul_norm, 1.0),
+                    alpha=0.6,
+                )
 
         return figure

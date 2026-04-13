@@ -41,6 +41,29 @@ def satellite_backhaul_capacity_bps(
     atmospheric_loss_db: float = config.L_ATM_DB,
     noise_figure_db: float = config.NF_SAT,
 ) -> float:
+    sinr_linear_value = satellite_backhaul_sinr_linear(
+        anchor_position=anchor_position,
+        satellite_position=satellite_position,
+        tx_power_w=tx_power_w,
+        bandwidth_hz=bandwidth_hz,
+        tx_gain_db=tx_gain_db,
+        rx_gain_db=rx_gain_db,
+        atmospheric_loss_db=atmospheric_loss_db,
+        noise_figure_db=noise_figure_db,
+    )
+    return shannon_capacity_bps(bandwidth_hz=bandwidth_hz, sinr_linear=sinr_linear_value)
+
+
+def satellite_backhaul_sinr_linear(
+    anchor_position: np.ndarray,
+    satellite_position: np.ndarray = np.asarray(config.SAT_POSITION, dtype=float),
+    tx_power_w: float = config.P_TX_UAV,
+    bandwidth_hz: float = config.B_SAT,
+    tx_gain_db: float = config.G_TX_DB,
+    rx_gain_db: float = config.G_RX_SAT_DB,
+    atmospheric_loss_db: float = config.L_ATM_DB,
+    noise_figure_db: float = config.NF_SAT,
+) -> float:
     distance_m = euclidean_distance_3d(
         ensure_3d_position(anchor_position, default_z=config.UAV_HEIGHT),
         ensure_3d_position(satellite_position, default_z=config.SAT_ALTITUDE),
@@ -54,11 +77,48 @@ def satellite_backhaul_capacity_bps(
         additional_loss_db=atmospheric_loss_db,
     )
     rx_power_w = db_to_linear_power(rx_power_dbw)
-    sinr_linear_value = rx_power_w / noise_power_watts(bandwidth_hz=bandwidth_hz, noise_figure_db=noise_figure_db)
-    return shannon_capacity_bps(bandwidth_hz=bandwidth_hz, sinr_linear=sinr_linear_value)
+    return rx_power_w / noise_power_watts(bandwidth_hz=bandwidth_hz, noise_figure_db=noise_figure_db)
+
+
+def satellite_backhaul_snr_db(
+    anchor_position: np.ndarray,
+    satellite_position: np.ndarray = np.asarray(config.SAT_POSITION, dtype=float),
+    **kwargs: float,
+) -> float:
+    return 10.0 * math.log10(
+        max(
+            satellite_backhaul_sinr_linear(
+                anchor_position=anchor_position,
+                satellite_position=satellite_position,
+                **kwargs,
+            ),
+            config.EPSILON,
+        )
+    )
 
 
 def gbs_backhaul_capacity_bps(
+    anchor_position: np.ndarray,
+    gbs_position: np.ndarray,
+    tx_power_w: float = config.P_TX_UAV,
+    bandwidth_hz: float = config.GBS_BW,
+    tx_gain_db: float = 0.0,
+    rx_gain_db: float = config.G_RX_GBS_DB,
+    noise_figure_db: float = config.NF_GBS,
+) -> float:
+    sinr_linear_value = gbs_backhaul_sinr_linear(
+        anchor_position=anchor_position,
+        gbs_position=gbs_position,
+        tx_power_w=tx_power_w,
+        bandwidth_hz=bandwidth_hz,
+        tx_gain_db=tx_gain_db,
+        rx_gain_db=rx_gain_db,
+        noise_figure_db=noise_figure_db,
+    )
+    return shannon_capacity_bps(bandwidth_hz=bandwidth_hz, sinr_linear=sinr_linear_value)
+
+
+def gbs_backhaul_sinr_linear(
     anchor_position: np.ndarray,
     gbs_position: np.ndarray,
     tx_power_w: float = config.P_TX_UAV,
@@ -79,8 +139,24 @@ def gbs_backhaul_capacity_bps(
         rx_gain_db=rx_gain_db,
     )
     rx_power_w = db_to_linear_power(rx_power_dbw)
-    sinr_linear_value = rx_power_w / noise_power_watts(bandwidth_hz=bandwidth_hz, noise_figure_db=noise_figure_db)
-    return shannon_capacity_bps(bandwidth_hz=bandwidth_hz, sinr_linear=sinr_linear_value)
+    return rx_power_w / noise_power_watts(bandwidth_hz=bandwidth_hz, noise_figure_db=noise_figure_db)
+
+
+def gbs_backhaul_snr_db(
+    anchor_position: np.ndarray,
+    gbs_position: np.ndarray,
+    **kwargs: float,
+) -> float:
+    return 10.0 * math.log10(
+        max(
+            gbs_backhaul_sinr_linear(
+                anchor_position=anchor_position,
+                gbs_position=gbs_position,
+                **kwargs,
+            ),
+            config.EPSILON,
+        )
+    )
 
 
 def backhaul_capacity_bps(

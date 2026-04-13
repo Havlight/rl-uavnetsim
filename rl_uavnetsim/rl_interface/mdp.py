@@ -14,7 +14,7 @@ from rl_uavnetsim.network import (
     algebraic_connectivity_lambda2,
     build_a2a_capacity_matrix_bps,
     build_adjacency_matrix,
-    find_widest_path_to_anchor,
+    compute_routing_table,
 )
 from rl_uavnetsim.rl_interface.linucb_stub import LinUCBStub
 from rl_uavnetsim.utils.helpers import euclidean_distance_2d, euclidean_distance_3d
@@ -69,6 +69,18 @@ def build_global_state(
     users: Sequence[GroundUser],
     env_state: EnvState,
 ) -> dict[str, np.ndarray | float]:
+    active_gateway_mask = np.asarray(
+        [float(uav.id in env_state.active_gateway_uav_ids) for uav in uavs],
+        dtype=float,
+    )
+    backhaul_capacity_by_uav = np.asarray(
+        [env_state.backhaul_capacity_bps_by_gateway.get(uav.id, 0.0) for uav in uavs],
+        dtype=float,
+    )
+    reachable_gateway_counts = np.asarray(
+        [env_state.reachable_gateway_count_by_uav.get(uav.id, 0) for uav in uavs],
+        dtype=float,
+    )
     return {
         "uav_positions": np.asarray([uav.position for uav in uavs], dtype=float),
         "uav_energies": np.asarray([uav.residual_energy_j for uav in uavs], dtype=float),
@@ -77,6 +89,12 @@ def build_global_state(
         "user_access_backlogs": np.asarray([user.user_access_backlog_bits for user in users], dtype=float),
         "associations": np.asarray([user.associated_uav_id for user in users], dtype=int),
         "connectivity_matrix": np.asarray(env_state.adjacency_matrix, dtype=int),
+        "active_gateway_mask": active_gateway_mask,
+        "reachable_gateway_counts": reachable_gateway_counts,
+        "backhaul_capacity_by_uav_norm": np.asarray(
+            [_safe_norm(value, _bps_reference()) for value in backhaul_capacity_by_uav],
+            dtype=float,
+        ),
         "backhaul_capacity_norm": np.asarray(
             [_safe_norm(env_state.backhaul_capacity_bps, _bps_reference())],
             dtype=float,
@@ -95,11 +113,27 @@ def build_local_observation(
     max_obs_users_pad: int = config.MAX_OBS_USERS_PAD,
     obs_radius_m: float = config.OBS_RADIUS,
 ) -> np.ndarray:
+    # Observation layout:
+    # [0:3] self position xyz
+    # [3:5] self velocity xy
+    # [5] self energy norm
+    # [6] self is gateway-capable
+    # [7] self relay queue norm
+    # [8] self associated-user-count norm
+    # [9] reachable gateway count norm
+    # [10] best gateway path capacity norm
+    # [11] best gateway backhaul capacity norm
+    # [12:12+3*(N-1)] other UAV relative positions
+    # next (N-1) entries: link-active flags
+    # final 3*MAX_OBS_USERS_PAD entries: visible user relative xy + backlog norm
     relay_capacity_matrix_bps = (
         build_a2a_capacity_matrix_bps(uavs) if relay_capacity_matrix_bps is None else np.asarray(relay_capacity_matrix_bps, dtype=float)
     )
     id_to_index = {other_uav.id: index for index, other_uav in enumerate(uavs)}
     uav_index = id_to_index[uav.id]
+    reachable_gateway_count = env_state.reachable_gateway_count_by_uav.get(uav.id, 0)
+    best_gateway_path_capacity_bps = env_state.best_gateway_path_capacity_bps_by_uav.get(uav.id, 0.0)
+    best_gateway_backhaul_capacity_bps = env_state.best_gateway_backhaul_capacity_bps_by_uav.get(uav.id, 0.0)
 
     self_features = np.array(
         [
@@ -109,28 +143,14 @@ def build_local_observation(
             uav.velocity[0],
             uav.velocity[1],
             _safe_norm(uav.residual_energy_j, config.E_INITIAL),
-            float(uav.is_anchor),
+            float(uav.is_gateway_capable),
             _safe_norm(uav.relay_queue_total_bits, config.RELAY_QUEUE_REF_BITS),
             _safe_norm(len(uav.associated_user_ids), max(config.NUM_USERS, 1)),
+            _safe_norm(reachable_gateway_count, max(len(env_state.active_gateway_uav_ids), 1)),
+            _safe_norm(best_gateway_path_capacity_bps, _bps_reference()),
+            _safe_norm(best_gateway_backhaul_capacity_bps, _bps_reference()),
         ],
         dtype=float,
-    )
-
-    if uav.is_anchor:
-        est_relay_capacity_bps = env_state.backhaul_capacity_bps
-    else:
-        relay_path = find_widest_path_to_anchor(
-            source_uav_id=uav.id,
-            anchor_uav_id=config.ANCHOR_UAV_ID,
-            uavs=uavs,
-            capacity_matrix_bps=relay_capacity_matrix_bps,
-        )
-        est_relay_capacity_bps = relay_path.bottleneck_capacity_bps
-    self_features = np.concatenate(
-        [
-            self_features,
-            np.array([_safe_norm(est_relay_capacity_bps, _bps_reference())], dtype=float),
-        ]
     )
 
     other_relative_positions: list[float] = []
@@ -233,15 +253,41 @@ class MultiAgentUavNetEnv:
         adjacency_matrix = build_adjacency_matrix(relay_capacity_matrix_bps)
         lambda2 = algebraic_connectivity_lambda2(adjacency_matrix)
         try:
-            backhaul_capacity_bps_value = self.sim_env._resolve_backhaul_capacity_bps()
+            backhaul_capacity_bps_by_gateway = self.sim_env._resolve_backhaul_capacity_bps_by_gateway(
+                backhaul_capacity_bps_override=None,
+                backhaul_capacity_bps_override_by_gateway=None,
+            )
         except ValueError:
-            backhaul_capacity_bps_value = 0.0
+            backhaul_capacity_bps_by_gateway = {}
+        active_gateway_uav_ids = tuple(
+            sorted(gateway_uav_id for gateway_uav_id, capacity_bps in backhaul_capacity_bps_by_gateway.items() if capacity_bps > 0.0)
+        )
+        routing_table = compute_routing_table(
+            uavs=self.sim_env.uavs,
+            active_gateway_uav_ids=active_gateway_uav_ids,
+            capacity_matrix_bps=relay_capacity_matrix_bps,
+            backhaul_capacity_bps_by_gateway=backhaul_capacity_bps_by_gateway,
+        )
         env_state = EnvState(
             current_step=env_state.current_step,
             adjacency_matrix=adjacency_matrix,
             lambda2=lambda2,
-            backhaul_capacity_bps=backhaul_capacity_bps_value,
+            backhaul_capacity_bps=float(sum(backhaul_capacity_bps_by_gateway.values())),
             total_delivered_bits_step=0.0,
+            active_gateway_uav_ids=active_gateway_uav_ids,
+            routing_next_hop_by_uav={
+                uav_id: decision.next_hop_uav_id for uav_id, decision in routing_table.items()
+            },
+            reachable_gateway_count_by_uav={
+                uav_id: decision.reachable_gateway_count for uav_id, decision in routing_table.items()
+            },
+            backhaul_capacity_bps_by_gateway=dict(backhaul_capacity_bps_by_gateway),
+            best_gateway_path_capacity_bps_by_uav={
+                uav_id: decision.effective_path_capacity_bps for uav_id, decision in routing_table.items()
+            },
+            best_gateway_backhaul_capacity_bps_by_uav={
+                uav_id: decision.gateway_backhaul_capacity_bps for uav_id, decision in routing_table.items()
+            },
         )
         self.last_known_positions_by_uav_id = {
             uav.id: np.asarray(uav.position, dtype=float).copy() for uav in self.sim_env.uavs

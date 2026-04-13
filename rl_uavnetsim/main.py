@@ -47,17 +47,17 @@ def get_demo_mode_config(mode: str) -> DemoModeConfig:
     normalized_mode = mode.lower()
     if normalized_mode == "stress":
         return DemoModeConfig(
-        mode="stress",
-        num_uavs=4,
-        num_users=config.NUM_USERS,
-        user_demand_rate_bps=2.0e6,
-        orbit_radius_m=600.0,
-        user_speed_mean_mps=3.5,
-        backhaul_capacity_bps_override=None,
-        relay_capacity_scale=0.35,
-        relay_capacity_cap_bps=None,
-        user_distribution="hotspots",
-    )
+            mode="stress",
+            num_uavs=4,
+            num_users=config.NUM_USERS,
+            user_demand_rate_bps=2.0e6,
+            orbit_radius_m=600.0,
+            user_speed_mean_mps=3.5,
+            backhaul_capacity_bps_override=None,
+            relay_capacity_scale=0.35,
+            relay_capacity_cap_bps=None,
+            user_distribution="hotspots",
+        )
     return DemoModeConfig(
         mode="default",
         num_uavs=config.NUM_UAVS,
@@ -93,7 +93,7 @@ def build_demo_entities(
             velocity=np.zeros(2),
             speed=0.0,
             direction=0.0,
-            is_anchor=True,
+            is_gateway_capable=True,
             energy_model=SimplifiedEnergyModel(),
         )
     ]
@@ -117,7 +117,6 @@ def build_demo_entities(
                 velocity=np.zeros(2),
                 speed=0.0,
                 direction=0.0,
-                is_anchor=False,
                 energy_model=SimplifiedEnergyModel(),
             )
         )
@@ -202,7 +201,7 @@ def run_demo_episode(
         users=users,
         satellites=satellites,
         ground_base_stations=ground_base_stations,
-        anchor_uav_id=config.ANCHOR_UAV_ID,
+        gateway_capable_uav_ids=[0],
         backhaul_type=backhaul_type,
         rng=np.random.default_rng(seed),
     )
@@ -238,7 +237,7 @@ def run_demo_episode(
                 step_result,
                 sim_env.uavs,
                 sim_env.users,
-                anchor_uav_id=config.ANCHOR_UAV_ID,
+                gateway_uav_ids=step_result.env_state.active_gateway_uav_ids,
                 backhaul_type=backhaul_type,
                 backhaul_node_position=backhaul_node_position,
             )

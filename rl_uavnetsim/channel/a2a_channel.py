@@ -59,5 +59,13 @@ def a2a_link_is_active(
     position_a: np.ndarray,
     position_b: np.ndarray,
     threshold_db: float = config.GAMMA_TH_DB,
+    max_range_m: float = config.MAX_RELAY_RANGE_M,
+    fade_margin_db: float = config.FADE_MARGIN_DB,
 ) -> bool:
-    return a2a_snr_db(position_a, position_b) >= float(threshold_db)
+    distance_m = euclidean_distance_3d(
+        ensure_3d_position(position_a, default_z=config.UAV_HEIGHT),
+        ensure_3d_position(position_b, default_z=config.UAV_HEIGHT),
+    )
+    if distance_m > float(max_range_m):
+        return False
+    return a2a_snr_db(position_a, position_b) >= float(threshold_db) + float(fade_margin_db)
