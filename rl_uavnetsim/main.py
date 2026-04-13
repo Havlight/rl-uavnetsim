@@ -85,11 +85,11 @@ def build_demo_entities(
 ) -> tuple[list[UAV], list[GroundUser], list[Satellite], list[GroundBaseStation]]:
     rng = np.random.default_rng(seed)
 
-    anchor_position = np.array([config.MAP_LENGTH / 2.0, config.MAP_WIDTH / 2.0, config.UAV_HEIGHT], dtype=float)
+    gateway_position = np.array([config.MAP_LENGTH / 2.0, config.MAP_WIDTH / 2.0, config.UAV_HEIGHT], dtype=float)
     uavs: list[UAV] = [
         UAV(
             id=0,
-            position=anchor_position,
+            position=gateway_position,
             velocity=np.zeros(2),
             speed=0.0,
             direction=0.0,
@@ -101,9 +101,9 @@ def build_demo_entities(
     for uav_id in range(1, int(num_uavs)):
         angle_rad = 2.0 * np.pi * (uav_id - 1) / max(int(num_uavs) - 1, 1)
         position = np.array(
-            [
-                anchor_position[0] + orbit_radius_m * np.cos(angle_rad),
-                anchor_position[1] + orbit_radius_m * np.sin(angle_rad),
+                [
+                    gateway_position[0] + orbit_radius_m * np.cos(angle_rad),
+                    gateway_position[1] + orbit_radius_m * np.sin(angle_rad),
                 config.UAV_HEIGHT,
             ],
             dtype=float,

@@ -2,10 +2,10 @@
 
 `rl-uavnetsim` is a standalone, step-based UAV network simulator for MARL research.
 
-This v1 follows `implementation_plan3_5.md` and focuses on:
+This v1 focuses on:
 - multi-UAV trajectory control
 - moving ground users
-- user-UAV access, UAV-UAV relay, and anchor backhaul
+- user-UAV access, UAV-UAV relay, and gateway backhaul
 - bit-backlog and relay-queue dynamics
 - heuristic PF scheduling with future RL hooks
 - metrics, plots, and GIF visualization
@@ -25,7 +25,6 @@ This repository intentionally does not implement packet-level or SimPy event-dri
 ```text
 rl_uavnetsim/
 tests/
-implementation_plan3_5.md
 ```
 
 ## Installation

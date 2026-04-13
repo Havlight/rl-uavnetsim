@@ -32,7 +32,7 @@ def received_power_dbw(
 
 
 def satellite_backhaul_capacity_bps(
-    anchor_position: np.ndarray,
+    gateway_position: np.ndarray,
     satellite_position: np.ndarray = np.asarray(config.SAT_POSITION, dtype=float),
     tx_power_w: float = config.P_TX_UAV,
     bandwidth_hz: float = config.B_SAT,
@@ -42,7 +42,7 @@ def satellite_backhaul_capacity_bps(
     noise_figure_db: float = config.NF_SAT,
 ) -> float:
     sinr_linear_value = satellite_backhaul_sinr_linear(
-        anchor_position=anchor_position,
+        gateway_position=gateway_position,
         satellite_position=satellite_position,
         tx_power_w=tx_power_w,
         bandwidth_hz=bandwidth_hz,
@@ -55,7 +55,7 @@ def satellite_backhaul_capacity_bps(
 
 
 def satellite_backhaul_sinr_linear(
-    anchor_position: np.ndarray,
+    gateway_position: np.ndarray,
     satellite_position: np.ndarray = np.asarray(config.SAT_POSITION, dtype=float),
     tx_power_w: float = config.P_TX_UAV,
     bandwidth_hz: float = config.B_SAT,
@@ -65,7 +65,7 @@ def satellite_backhaul_sinr_linear(
     noise_figure_db: float = config.NF_SAT,
 ) -> float:
     distance_m = euclidean_distance_3d(
-        ensure_3d_position(anchor_position, default_z=config.UAV_HEIGHT),
+        ensure_3d_position(gateway_position, default_z=config.UAV_HEIGHT),
         ensure_3d_position(satellite_position, default_z=config.SAT_ALTITUDE),
     )
     path_loss_db = free_space_path_loss_db(distance_m)
@@ -81,14 +81,14 @@ def satellite_backhaul_sinr_linear(
 
 
 def satellite_backhaul_snr_db(
-    anchor_position: np.ndarray,
+    gateway_position: np.ndarray,
     satellite_position: np.ndarray = np.asarray(config.SAT_POSITION, dtype=float),
     **kwargs: float,
 ) -> float:
     return 10.0 * math.log10(
         max(
             satellite_backhaul_sinr_linear(
-                anchor_position=anchor_position,
+                gateway_position=gateway_position,
                 satellite_position=satellite_position,
                 **kwargs,
             ),
@@ -98,7 +98,7 @@ def satellite_backhaul_snr_db(
 
 
 def gbs_backhaul_capacity_bps(
-    anchor_position: np.ndarray,
+    gateway_position: np.ndarray,
     gbs_position: np.ndarray,
     tx_power_w: float = config.P_TX_UAV,
     bandwidth_hz: float = config.GBS_BW,
@@ -107,7 +107,7 @@ def gbs_backhaul_capacity_bps(
     noise_figure_db: float = config.NF_GBS,
 ) -> float:
     sinr_linear_value = gbs_backhaul_sinr_linear(
-        anchor_position=anchor_position,
+        gateway_position=gateway_position,
         gbs_position=gbs_position,
         tx_power_w=tx_power_w,
         bandwidth_hz=bandwidth_hz,
@@ -119,7 +119,7 @@ def gbs_backhaul_capacity_bps(
 
 
 def gbs_backhaul_sinr_linear(
-    anchor_position: np.ndarray,
+    gateway_position: np.ndarray,
     gbs_position: np.ndarray,
     tx_power_w: float = config.P_TX_UAV,
     bandwidth_hz: float = config.GBS_BW,
@@ -128,7 +128,7 @@ def gbs_backhaul_sinr_linear(
     noise_figure_db: float = config.NF_GBS,
 ) -> float:
     distance_m = euclidean_distance_3d(
-        ensure_3d_position(anchor_position, default_z=config.UAV_HEIGHT),
+        ensure_3d_position(gateway_position, default_z=config.UAV_HEIGHT),
         ensure_3d_position(gbs_position, default_z=0.0),
     )
     path_loss_db = free_space_path_loss_db(distance_m)
@@ -143,14 +143,14 @@ def gbs_backhaul_sinr_linear(
 
 
 def gbs_backhaul_snr_db(
-    anchor_position: np.ndarray,
+    gateway_position: np.ndarray,
     gbs_position: np.ndarray,
     **kwargs: float,
 ) -> float:
     return 10.0 * math.log10(
         max(
             gbs_backhaul_sinr_linear(
-                anchor_position=anchor_position,
+                gateway_position=gateway_position,
                 gbs_position=gbs_position,
                 **kwargs,
             ),
@@ -160,7 +160,7 @@ def gbs_backhaul_snr_db(
 
 
 def backhaul_capacity_bps(
-    anchor_position: np.ndarray,
+    gateway_position: np.ndarray,
     backhaul_node: Any,
     backhaul_type: str | None = None,
 ) -> float:
@@ -169,7 +169,7 @@ def backhaul_capacity_bps(
 
     if node_type == "satellite" or backhaul_node.__class__.__name__.lower() == "satellite":
         return satellite_backhaul_capacity_bps(
-            anchor_position=anchor_position,
+            gateway_position=gateway_position,
             satellite_position=position,
             bandwidth_hz=getattr(backhaul_node, "bandwidth_hz", config.B_SAT),
             rx_gain_db=getattr(backhaul_node, "rx_gain_db", config.G_RX_SAT_DB),
@@ -179,7 +179,7 @@ def backhaul_capacity_bps(
 
     if node_type == "gbs" or backhaul_node.__class__.__name__.lower() == "groundbasestation":
         return gbs_backhaul_capacity_bps(
-            anchor_position=anchor_position,
+            gateway_position=gateway_position,
             gbs_position=position,
             bandwidth_hz=getattr(backhaul_node, "bandwidth_hz", config.GBS_BW),
             rx_gain_db=getattr(backhaul_node, "rx_gain_db", config.G_RX_GBS_DB),

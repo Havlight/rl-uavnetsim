@@ -18,7 +18,6 @@ class UAV:
     velocity: np.ndarray
     speed: float
     direction: float
-    is_anchor: bool = False
     is_gateway_capable: bool = False
     residual_energy_j: float = config.E_INITIAL
     associated_user_ids: list[int] = field(default_factory=list)
@@ -34,8 +33,6 @@ class UAV:
         self.speed = float(self.speed)
         self.direction = float(self.direction)
         self.residual_energy_j = float(self.residual_energy_j)
-        if self.is_anchor and not self.is_gateway_capable:
-            self.is_gateway_capable = True
 
     def reset_step_counters(self) -> None:
         self.associated_user_ids = []

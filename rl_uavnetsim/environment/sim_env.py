@@ -47,11 +47,6 @@ class SimStepAccounting:
     relay_in_bits_by_uav: dict[int, float] = field(default_factory=dict)
     backhaul_out_bits_by_gateway: dict[int, float] = field(default_factory=dict)
     energy_used_j_by_uav: dict[int, float] = field(default_factory=dict)
-    member_queue_prev_bits_by_uav: dict[int, float] = field(default_factory=dict)
-    member_queue_next_bits_by_uav: dict[int, float] = field(default_factory=dict)
-    anchor_queue_prev_bits: float = 0.0
-    anchor_queue_next_bits: float = 0.0
-    anchor_access_ingress_bits: float = 0.0
 
 
 @dataclass
@@ -73,17 +68,14 @@ class SimEnv:
         satellites: Sequence[Satellite] | None = None,
         ground_base_stations: Sequence[GroundBaseStation] | None = None,
         gateway_capable_uav_ids: Sequence[int] | None = None,
-        anchor_uav_id: int | None = config.ANCHOR_UAV_ID,
         backhaul_type: str = config.BACKHAUL_TYPE,
         rng: np.random.Generator | None = None,
     ) -> None:
         resolved_gateway_capable_uav_ids = self._resolve_gateway_capable_uav_ids(
             uavs=uavs,
             gateway_capable_uav_ids=gateway_capable_uav_ids,
-            anchor_uav_id=anchor_uav_id,
         )
         self.gateway_capable_uav_ids = tuple(resolved_gateway_capable_uav_ids)
-        self.anchor_uav_id = self.gateway_capable_uav_ids[0] if len(self.gateway_capable_uav_ids) == 1 else -1
         self.backhaul_type = str(backhaul_type)
         self.rng = rng or np.random.default_rng()
 
@@ -213,22 +205,6 @@ class SimEnv:
             uav.id: uav.relay_queue_total_bits for uav in self.uavs
         }
 
-        if len(self.gateway_capable_uav_ids) == 1:
-            gateway_uav_id = self.gateway_capable_uav_ids[0]
-            accounting.anchor_queue_prev_bits = accounting.relay_queue_prev_bits_by_uav.get(gateway_uav_id, 0.0)
-            accounting.anchor_queue_next_bits = accounting.relay_queue_next_bits_by_uav.get(gateway_uav_id, 0.0)
-            accounting.anchor_access_ingress_bits = accounting.access_ingress_bits_by_uav.get(gateway_uav_id, 0.0)
-            accounting.member_queue_prev_bits_by_uav = {
-                uav_id: queued_bits
-                for uav_id, queued_bits in accounting.relay_queue_prev_bits_by_uav.items()
-                if uav_id != gateway_uav_id
-            }
-            accounting.member_queue_next_bits_by_uav = {
-                uav_id: queued_bits
-                for uav_id, queued_bits in accounting.relay_queue_next_bits_by_uav.items()
-                if uav_id != gateway_uav_id
-            }
-
         total_delivered_bits_step = float(sum(user.delivered_bits_step for user in self.users))
         self.current_step += 1
         env_state = self._build_env_state(
@@ -265,16 +241,13 @@ class SimEnv:
         *,
         uavs: Sequence[UAV],
         gateway_capable_uav_ids: Sequence[int] | None,
-        anchor_uav_id: int | None,
     ) -> list[int]:
         if gateway_capable_uav_ids is not None:
             return sorted({int(uav_id) for uav_id in gateway_capable_uav_ids})
-        if anchor_uav_id is not None:
-            return [int(anchor_uav_id)]
-        inferred_gateway_capable_uav_ids = [uav.id for uav in uavs if uav.is_gateway_capable or uav.is_anchor]
+        inferred_gateway_capable_uav_ids = [uav.id for uav in uavs if uav.is_gateway_capable]
         if inferred_gateway_capable_uav_ids:
             return sorted({int(uav_id) for uav_id in inferred_gateway_capable_uav_ids})
-        return [config.ANCHOR_UAV_ID]
+        return [config.DEFAULT_GATEWAY_UAV_ID]
 
     def _reset_step_counters(self) -> None:
         for user in self.users:

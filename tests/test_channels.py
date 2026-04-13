@@ -44,16 +44,16 @@ def test_a2g_rate_is_positive_and_interference_reduces_sinr() -> None:
 
 
 def test_a2a_capacity_decreases_with_distance() -> None:
-    anchor_position = np.array([0.0, 0.0, 100.0])
+    gateway_position = np.array([0.0, 0.0, 100.0])
     near_member_position = np.array([10.0, 0.0, 100.0])
     far_member_position = np.array([200.0, 0.0, 100.0])
 
-    near_capacity_bps = a2a_capacity_bps(anchor_position, near_member_position)
-    far_capacity_bps = a2a_capacity_bps(anchor_position, far_member_position)
+    near_capacity_bps = a2a_capacity_bps(gateway_position, near_member_position)
+    far_capacity_bps = a2a_capacity_bps(gateway_position, far_member_position)
 
     assert near_capacity_bps > far_capacity_bps
-    assert a2a_snr_db(anchor_position, near_member_position) > a2a_snr_db(anchor_position, far_member_position)
-    assert isinstance(a2a_link_is_active(anchor_position, near_member_position), bool)
+    assert a2a_snr_db(gateway_position, near_member_position) > a2a_snr_db(gateway_position, far_member_position)
+    assert isinstance(a2a_link_is_active(gateway_position, near_member_position), bool)
 
 
 def test_a2a_link_is_active_respects_max_range_cap() -> None:
@@ -65,17 +65,17 @@ def test_a2a_link_is_active_respects_max_range_cap() -> None:
 
 
 def test_satellite_and_gbs_backhaul_entities_are_usable() -> None:
-    anchor_position = np.array([100.0, 100.0, config.UAV_HEIGHT])
+    gateway_position = np.array([100.0, 100.0, config.UAV_HEIGHT])
     satellite = Satellite(id=0)
     gbs = GroundBaseStation(id=0)
 
-    sat_capacity_bps = satellite_backhaul_capacity_bps(anchor_position, satellite.position)
-    gbs_capacity_bps = gbs_backhaul_capacity_bps(anchor_position, gbs.position)
+    sat_capacity_bps = satellite_backhaul_capacity_bps(gateway_position, satellite.position)
+    gbs_capacity_bps = gbs_backhaul_capacity_bps(gateway_position, gbs.position)
 
     assert sat_capacity_bps > 0.0
     assert gbs_capacity_bps > 0.0
-    assert math.isclose(backhaul_capacity_bps(anchor_position, satellite), sat_capacity_bps)
-    assert math.isclose(backhaul_capacity_bps(anchor_position, gbs), gbs_capacity_bps)
+    assert math.isclose(backhaul_capacity_bps(gateway_position, satellite), sat_capacity_bps)
+    assert math.isclose(backhaul_capacity_bps(gateway_position, gbs), gbs_capacity_bps)
 
 
 def test_energy_models_return_finite_positive_values() -> None:

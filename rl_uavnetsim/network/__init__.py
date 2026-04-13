@@ -9,11 +9,10 @@ from .relay import (
     execute_backhaul_service,
     execute_relay_service,
 )
-from .routing import RelayPath, RouteDecision, compute_routing_table, find_widest_path_to_anchor
+from .routing import RouteDecision, compute_routing_table
 
 __all__ = [
     "BackhaulServiceResult",
-    "RelayPath",
     "RelayServiceResult",
     "RouteDecision",
     "algebraic_connectivity_lambda2",
@@ -22,5 +21,4 @@ __all__ = [
     "compute_routing_table",
     "execute_backhaul_service",
     "execute_relay_service",
-    "find_widest_path_to_anchor",
 ]

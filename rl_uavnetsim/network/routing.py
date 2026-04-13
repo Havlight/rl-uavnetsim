@@ -10,18 +10,6 @@ from rl_uavnetsim.entities.uav import UAV
 
 
 @dataclass
-class RelayPath:
-    source_uav_id: int
-    anchor_uav_id: int
-    path_uav_ids: list[int]
-    bottleneck_capacity_bps: float
-
-    @property
-    def is_reachable(self) -> bool:
-        return len(self.path_uav_ids) > 0 and self.bottleneck_capacity_bps > 0.0
-
-
-@dataclass
 class RouteDecision:
     source_uav_id: int
     selected_gateway_uav_id: int | None
@@ -90,35 +78,6 @@ def _widest_path_indices(
         path_indices.append(current_index)
     path_indices.reverse()
     return path_indices, bottleneck_capacity_bps
-
-
-def find_widest_path_to_anchor(
-    source_uav_id: int,
-    anchor_uav_id: int,
-    uavs: Sequence[UAV],
-    capacity_matrix_bps: np.ndarray,
-) -> RelayPath:
-    if source_uav_id == anchor_uav_id:
-        return RelayPath(
-            source_uav_id=source_uav_id,
-            anchor_uav_id=anchor_uav_id,
-            path_uav_ids=[anchor_uav_id],
-            bottleneck_capacity_bps=np.inf,
-        )
-
-    id_to_index = _id_to_index_map(uavs)
-    path_indices, bottleneck_capacity_bps = _widest_path_indices(
-        source_index=id_to_index[source_uav_id],
-        target_index=id_to_index[anchor_uav_id],
-        capacity_matrix_bps=np.asarray(capacity_matrix_bps, dtype=float),
-    )
-    path_uav_ids = [uavs[index].id for index in path_indices]
-    return RelayPath(
-        source_uav_id=source_uav_id,
-        anchor_uav_id=anchor_uav_id,
-        path_uav_ids=path_uav_ids,
-        bottleneck_capacity_bps=bottleneck_capacity_bps,
-    )
 
 
 def compute_routing_table(

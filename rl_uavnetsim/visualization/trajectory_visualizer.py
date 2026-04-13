@@ -38,10 +38,6 @@ class VisualizationFrame:
     backhaul_type: str | None = None
     backhaul_node_position: np.ndarray | None = None
 
-    @property
-    def anchor_uav_id(self) -> int:
-        return int(self.gateway_uav_ids[0]) if self.gateway_uav_ids else -1
-
 
 def build_visualization_frame(
     step_result: SimStepResult,
@@ -49,7 +45,6 @@ def build_visualization_frame(
     users: Sequence[GroundUser],
     *,
     gateway_uav_ids: Sequence[int] | None = None,
-    anchor_uav_id: int | None = None,
     backhaul_type: str | None = None,
     backhaul_node_position: np.ndarray | None = None,
 ) -> VisualizationFrame:
@@ -58,11 +53,7 @@ def build_visualization_frame(
         for gateway_uav_id in (
             gateway_uav_ids
             if gateway_uav_ids is not None
-            else (
-                step_result.env_state.active_gateway_uav_ids
-                if step_result.env_state.active_gateway_uav_ids
-                else (() if anchor_uav_id is None else (int(anchor_uav_id),))
-            )
+            else step_result.env_state.active_gateway_uav_ids
         )
     )
     uav_ids = [uav.id for uav in uavs]

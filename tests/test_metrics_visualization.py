@@ -12,15 +12,15 @@ from rl_uavnetsim.visualization import MetricsPlotter, TrajectoryVisualizer, bui
 
 
 def test_metrics_collector_and_plotters_generate_outputs(tmp_path: Path) -> None:
-    anchor = UAV(
+    gateway = UAV(
         id=0,
         position=np.array([0.0, 0.0, config.UAV_HEIGHT]),
         velocity=np.zeros(2),
         speed=0.0,
         direction=0.0,
-        is_anchor=True,
+        is_gateway_capable=True,
     )
-    member = UAV(
+    relay = UAV(
         id=1,
         position=np.array([50.0, 0.0, config.UAV_HEIGHT]),
         velocity=np.zeros(2),
@@ -37,10 +37,10 @@ def test_metrics_collector_and_plotters_generate_outputs(tmp_path: Path) -> None
     )
     satellite = Satellite(id=0)
     env = SimEnv(
-        uavs=[anchor, member],
+        uavs=[gateway, relay],
         users=[user],
         satellites=[satellite],
-        anchor_uav_id=anchor.id,
+        gateway_capable_uav_ids=[gateway.id],
         backhaul_type="satellite",
     )
 
@@ -57,7 +57,7 @@ def test_metrics_collector_and_plotters_generate_outputs(tmp_path: Path) -> None
                 step_result,
                 env.uavs,
                 env.users,
-                anchor_uav_id=anchor.id,
+                gateway_uav_ids=step_result.env_state.active_gateway_uav_ids,
                 backhaul_type="satellite",
                 backhaul_node_position=satellite.position,
             )

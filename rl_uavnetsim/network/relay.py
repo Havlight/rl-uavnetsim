@@ -28,10 +28,6 @@ class RelayServiceResult:
     def total_relay_in_bits(self) -> float:
         return float(sum(self.relay_in_bits_by_uav.values()))
 
-    @property
-    def total_relay_in_bits_to_anchor(self) -> float:
-        return self.total_relay_in_bits
-
 
 @dataclass
 class BackhaulServiceResult:
@@ -116,17 +112,12 @@ def _proportional_dequeue_from_queue(
 def execute_relay_service(
     uavs: Sequence[UAV],
     *,
-    active_gateway_uav_ids: Sequence[int] | None = None,
-    anchor_uav_id: int | None = None,
+    active_gateway_uav_ids: Sequence[int],
     delta_t_s: float = config.DELTA_T,
     capacity_matrix_bps: np.ndarray | None = None,
     backhaul_capacity_bps_by_gateway: Mapping[int, float] | None = None,
     routing_table: Mapping[int, RouteDecision] | None = None,
 ) -> RelayServiceResult:
-    if active_gateway_uav_ids is None:
-        if anchor_uav_id is None:
-            raise ValueError("Either active_gateway_uav_ids or anchor_uav_id must be provided.")
-        active_gateway_uav_ids = [anchor_uav_id]
     if capacity_matrix_bps is None:
         capacity_matrix_bps = build_a2a_capacity_matrix_bps(uavs)
     capacity_matrix_bps = np.asarray(capacity_matrix_bps, dtype=float)
