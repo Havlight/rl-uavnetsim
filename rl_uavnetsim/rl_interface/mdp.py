@@ -234,12 +234,12 @@ class MultiAgentUavNetEnv:
         sim_env: SimEnv,
         *,
         max_steps: int = config.SIM_STEPS,
-        linucb_controllers: Mapping[int, LinUCBStub] | None = None,
+        alpha_controllers: Mapping[int, LinUCBStub] | None = None,
     ) -> None:
         self.sim_env = sim_env
         self.max_steps = int(max_steps)
         self.agent_ids = [uav.id for uav in self.sim_env.uavs]
-        self.linucb_controllers = dict(linucb_controllers or {
+        self.alpha_controllers = dict(alpha_controllers or {
             agent_id: LinUCBStub(fixed_alpha=config.PF_ALPHA_DEFAULT) for agent_id in self.agent_ids
         })
         self.last_known_positions_by_uav_id = {
@@ -324,14 +324,14 @@ class MultiAgentUavNetEnv:
         }
         step_result = self.sim_env.step(
             actions_by_uav_id=actions_by_agent,
-            linucb_controllers=self.linucb_controllers,
+            alpha_controllers=self.alpha_controllers,
             context_by_uav=context_by_uav,
             **sim_step_kwargs,
         )
 
         team_reward = compute_team_reward(step_result, self.sim_env.uavs, self.sim_env.users)
-        for agent_id, linucb_controller in self.linucb_controllers.items():
-            linucb_controller.update(context_by_uav.get(agent_id), team_reward)
+        for agent_id, alpha_controller in self.alpha_controllers.items():
+            alpha_controller.update(context_by_uav.get(agent_id), team_reward)
 
         self.last_known_positions_by_uav_id = {
             uav.id: np.asarray(uav.position, dtype=float).copy() for uav in self.sim_env.uavs

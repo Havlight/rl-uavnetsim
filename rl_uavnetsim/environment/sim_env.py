@@ -118,7 +118,7 @@ class SimEnv:
         *,
         actions_by_uav_id: Mapping[int, Mapping[str, float]] | None = None,
         alpha_by_uav: Mapping[int, float] | None = None,
-        linucb_controllers: Mapping[int, Any] | None = None,
+        alpha_controllers: Mapping[int, Any] | None = None,
         context_by_uav: Mapping[int, Any] | None = None,
         relay_capacity_matrix_bps: np.ndarray | None = None,
         backhaul_capacity_bps_override: float | None = None,
@@ -151,7 +151,7 @@ class SimEnv:
             uavs=self.uavs,
             users=self.users,
             alpha_by_uav=alpha_by_uav,
-            linucb_controllers=linucb_controllers,
+            alpha_controllers=alpha_controllers,
             context_by_uav=context_by_uav,
         )
         accounting.access_ingress_bits_by_uav = dict(access_step_result.total_access_ingress_bits_by_uav)

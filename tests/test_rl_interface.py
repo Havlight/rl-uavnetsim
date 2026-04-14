@@ -66,7 +66,7 @@ def test_multi_agent_env_reset_and_step_share_team_reward() -> None:
     marl_env = MultiAgentUavNetEnv(
         sim_env,
         max_steps=2,
-        linucb_controllers={
+        alpha_controllers={
             0: LinUCBStub(fixed_alpha=1.0),
             1: LinUCBStub(fixed_alpha=0.5),
         },

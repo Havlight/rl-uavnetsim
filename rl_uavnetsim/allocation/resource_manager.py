@@ -48,15 +48,15 @@ def _select_pf_alpha(
     uav: UAV,
     *,
     alpha_by_uav: Mapping[int, float] | None = None,
-    linucb_controllers: Mapping[int, Any] | None = None,
+    alpha_controllers: Mapping[int, Any] | None = None,
     context_by_uav: Mapping[int, Any] | None = None,
 ) -> float:
     if alpha_by_uav is not None and uav.id in alpha_by_uav:
         return float(alpha_by_uav[uav.id])
 
-    if linucb_controllers is not None and uav.id in linucb_controllers:
+    if alpha_controllers is not None and uav.id in alpha_controllers:
         context = None if context_by_uav is None else context_by_uav.get(uav.id)
-        return float(linucb_controllers[uav.id].select_alpha(context))
+        return float(alpha_controllers[uav.id].select_alpha(context))
 
     return float(config.PF_ALPHA_DEFAULT)
 
@@ -73,7 +73,7 @@ def run_access_pf_step(
     beta_pf: float = config.PF_BETA,
     epsilon: float = config.PF_EPSILON,
     alpha_by_uav: Mapping[int, float] | None = None,
-    linucb_controllers: Mapping[int, Any] | None = None,
+    alpha_controllers: Mapping[int, Any] | None = None,
     context_by_uav: Mapping[int, Any] | None = None,
     interference_power_provider: InterferencePowerProvider | None = None,
 ) -> AccessStepResult:
@@ -97,7 +97,7 @@ def run_access_pf_step(
             alpha = _select_pf_alpha(
                 uav=uav,
                 alpha_by_uav=alpha_by_uav,
-                linucb_controllers=linucb_controllers,
+                alpha_controllers=alpha_controllers,
                 context_by_uav=context_by_uav,
             )
             result.alpha_by_uav[uav.id] = alpha
@@ -179,7 +179,7 @@ def run_access_pf_step(
             alpha = result.alpha_by_uav.get(uav.id, _select_pf_alpha(
                 uav=uav,
                 alpha_by_uav=alpha_by_uav,
-                linucb_controllers=linucb_controllers,
+                alpha_controllers=alpha_controllers,
                 context_by_uav=context_by_uav,
             ))
             slot_result = PFSlotResult(uav_id=uav.id, slot_index=slot_index, alpha=float(alpha))
