@@ -28,6 +28,37 @@ def _bps_reference() -> float:
     return max(config.THROUGHPUT_REF_BITS / config.DELTA_T, config.EPSILON)
 
 
+def _normalize_uav_position(position: np.ndarray) -> np.ndarray:
+    return np.asarray(
+        [
+            _safe_norm(float(position[0]), config.MAP_LENGTH),
+            _safe_norm(float(position[1]), config.MAP_WIDTH),
+            _safe_norm(float(position[2]), config.UAV_HEIGHT),
+        ],
+        dtype=float,
+    )
+
+
+def _normalize_uav_velocity(velocity: np.ndarray) -> np.ndarray:
+    return np.asarray(
+        [
+            _safe_norm(float(velocity[0]), config.V_MAX),
+            _safe_norm(float(velocity[1]), config.V_MAX),
+        ],
+        dtype=float,
+    )
+
+
+def _normalize_user_position(position: np.ndarray) -> np.ndarray:
+    return np.asarray(
+        [
+            _safe_norm(float(position[0]), config.MAP_LENGTH),
+            _safe_norm(float(position[1]), config.MAP_WIDTH),
+        ],
+        dtype=float,
+    )
+
+
 def count_safety_violations(uavs: Sequence[UAV], d_safe_m: float = config.D_SAFE) -> int:
     violations = 0
     for source_index, source_uav in enumerate(uavs):
@@ -69,28 +100,50 @@ def build_global_state(
     users: Sequence[GroundUser],
     env_state: EnvState,
 ) -> dict[str, np.ndarray | float]:
+    uav_positions_norm = np.asarray([_normalize_uav_position(uav.position) for uav in uavs], dtype=float)
+    uav_velocities_norm = np.asarray([_normalize_uav_velocity(uav.velocity) for uav in uavs], dtype=float)
     active_gateway_mask = np.asarray(
         [float(uav.id in env_state.active_gateway_uav_ids) for uav in uavs],
         dtype=float,
     )
+    gateway_capable_mask = np.asarray([float(uav.is_gateway_capable) for uav in uavs], dtype=float)
     backhaul_capacity_by_uav = np.asarray(
         [env_state.backhaul_capacity_bps_by_gateway.get(uav.id, 0.0) for uav in uavs],
         dtype=float,
     )
-    reachable_gateway_counts = np.asarray(
-        [env_state.reachable_gateway_count_by_uav.get(uav.id, 0) for uav in uavs],
+    reachable_gateway_counts_norm = np.asarray(
+        [
+            _safe_norm(
+                env_state.reachable_gateway_count_by_uav.get(uav.id, 0),
+                max(len(env_state.active_gateway_uav_ids), 1),
+            )
+            for uav in uavs
+        ],
+        dtype=float,
+    )
+    user_positions_norm = np.asarray([_normalize_user_position(user.position) for user in users], dtype=float).reshape((-1, 2))
+    user_access_backlogs_norm = np.asarray(
+        [_safe_norm(user.user_access_backlog_bits, config.ACCESS_BACKLOG_REF_BITS) for user in users],
         dtype=float,
     )
     return {
-        "uav_positions": np.asarray([uav.position for uav in uavs], dtype=float),
-        "uav_energies": np.asarray([uav.residual_energy_j for uav in uavs], dtype=float),
-        "uav_queue_totals": np.asarray([uav.relay_queue_total_bits for uav in uavs], dtype=float),
-        "user_positions": np.asarray([user.position[:2] for user in users], dtype=float),
-        "user_access_backlogs": np.asarray([user.user_access_backlog_bits for user in users], dtype=float),
+        "uav_positions_norm": uav_positions_norm,
+        "uav_velocities_norm": uav_velocities_norm,
+        "uav_energies_norm": np.asarray(
+            [_safe_norm(uav.residual_energy_j, config.E_INITIAL) for uav in uavs],
+            dtype=float,
+        ),
+        "uav_queue_totals_norm": np.asarray(
+            [_safe_norm(uav.relay_queue_total_bits, config.RELAY_QUEUE_REF_BITS) for uav in uavs],
+            dtype=float,
+        ),
+        "gateway_capable_mask": gateway_capable_mask,
+        "user_positions_norm": user_positions_norm,
+        "user_access_backlogs_norm": user_access_backlogs_norm,
         "associations": np.asarray([user.associated_uav_id for user in users], dtype=int),
         "connectivity_matrix": np.asarray(env_state.adjacency_matrix, dtype=int),
         "active_gateway_mask": active_gateway_mask,
-        "reachable_gateway_counts": reachable_gateway_counts,
+        "reachable_gateway_counts_norm": reachable_gateway_counts_norm,
         "backhaul_capacity_by_uav_norm": np.asarray(
             [_safe_norm(value, _bps_reference()) for value in backhaul_capacity_by_uav],
             dtype=float,
@@ -109,13 +162,12 @@ def build_local_observation(
     env_state: EnvState,
     *,
     relay_capacity_matrix_bps: np.ndarray | None = None,
-    last_known_positions_by_uav_id: Mapping[int, np.ndarray] | None = None,
     max_obs_users_pad: int = config.MAX_OBS_USERS_PAD,
     obs_radius_m: float = config.OBS_RADIUS,
 ) -> np.ndarray:
     # Observation layout:
-    # [0:3] self position xyz
-    # [3:5] self velocity xy
+    # [0:3] self normalized absolute position xyz
+    # [3:5] self normalized absolute velocity xy
     # [5] self energy norm
     # [6] self is gateway-capable
     # [7] self relay queue norm
@@ -123,12 +175,10 @@ def build_local_observation(
     # [9] reachable gateway count norm
     # [10] best gateway path capacity norm
     # [11] best gateway backhaul capacity norm
-    # [12:12+3*(N-1)] other UAV relative positions
-    # next (N-1) entries: link-active flags
-    # final 3*MAX_OBS_USERS_PAD entries: visible user relative xy + backlog norm
-    relay_capacity_matrix_bps = (
-        build_a2a_capacity_matrix_bps(uavs) if relay_capacity_matrix_bps is None else np.asarray(relay_capacity_matrix_bps, dtype=float)
-    )
+    # [12:12+6*(N-1)] other UAV normalized absolute position xyz + velocity xy + link-active
+    # final 3*MAX_OBS_USERS_PAD entries: visible user normalized absolute xy + backlog norm
+    if relay_capacity_matrix_bps is not None:
+        np.asarray(relay_capacity_matrix_bps, dtype=float)
     id_to_index = {other_uav.id: index for index, other_uav in enumerate(uavs)}
     uav_index = id_to_index[uav.id]
     reachable_gateway_count = env_state.reachable_gateway_count_by_uav.get(uav.id, 0)
@@ -137,11 +187,11 @@ def build_local_observation(
 
     self_features = np.array(
         [
-            uav.position[0],
-            uav.position[1],
-            uav.position[2],
-            uav.velocity[0],
-            uav.velocity[1],
+            _safe_norm(uav.position[0], config.MAP_LENGTH),
+            _safe_norm(uav.position[1], config.MAP_WIDTH),
+            _safe_norm(uav.position[2], config.UAV_HEIGHT),
+            _safe_norm(uav.velocity[0], config.V_MAX),
+            _safe_norm(uav.velocity[1], config.V_MAX),
             _safe_norm(uav.residual_energy_j, config.E_INITIAL),
             float(uav.is_gateway_capable),
             _safe_norm(uav.relay_queue_total_bits, config.RELAY_QUEUE_REF_BITS),
@@ -153,19 +203,15 @@ def build_local_observation(
         dtype=float,
     )
 
-    other_relative_positions: list[float] = []
-    other_link_active: list[float] = []
+    other_uav_features: list[float] = []
     for other_uav in sorted(uavs, key=lambda item: item.id):
         if other_uav.id == uav.id:
             continue
         other_index = id_to_index[other_uav.id]
         link_active = float(env_state.adjacency_matrix[uav_index, other_index] > 0)
-        reference_position = other_uav.position
-        if link_active <= 0.0 and last_known_positions_by_uav_id is not None and other_uav.id in last_known_positions_by_uav_id:
-            reference_position = np.asarray(last_known_positions_by_uav_id[other_uav.id], dtype=float)
-        relative_position = np.asarray(reference_position, dtype=float) - uav.position
-        other_relative_positions.extend(relative_position.tolist())
-        other_link_active.append(link_active)
+        other_uav_features.extend(_normalize_uav_position(other_uav.position).tolist())
+        other_uav_features.extend(_normalize_uav_velocity(other_uav.velocity).tolist())
+        other_uav_features.append(link_active)
 
     visible_users = sorted(
         [
@@ -176,25 +222,20 @@ def build_local_observation(
         key=lambda user: euclidean_distance_2d(uav.position, user.position),
     )[: int(max_obs_users_pad)]
 
-    visible_relative_positions: list[float] = []
-    visible_user_backlog_norm: list[float] = []
+    visible_user_features: list[float] = []
     for user in visible_users:
-        relative_position_2d = user.position[:2] - uav.position[:2]
-        visible_relative_positions.extend(relative_position_2d.tolist())
-        visible_user_backlog_norm.append(_safe_norm(user.user_access_backlog_bits, config.ACCESS_BACKLOG_REF_BITS))
+        visible_user_features.extend(_normalize_user_position(user.position).tolist())
+        visible_user_features.append(_safe_norm(user.user_access_backlog_bits, config.ACCESS_BACKLOG_REF_BITS))
 
     num_padding_users = int(max_obs_users_pad) - len(visible_users)
     if num_padding_users > 0:
-        visible_relative_positions.extend([0.0] * (2 * num_padding_users))
-        visible_user_backlog_norm.extend([0.0] * num_padding_users)
+        visible_user_features.extend([0.0] * (3 * num_padding_users))
 
     return np.concatenate(
         [
             self_features,
-            np.asarray(other_relative_positions, dtype=float),
-            np.asarray(other_link_active, dtype=float),
-            np.asarray(visible_relative_positions, dtype=float),
-            np.asarray(visible_user_backlog_norm, dtype=float),
+            np.asarray(other_uav_features, dtype=float),
+            np.asarray(visible_user_features, dtype=float),
         ]
     )
 
@@ -242,9 +283,6 @@ class MultiAgentUavNetEnv:
         self.alpha_controllers = dict(alpha_controllers or {
             agent_id: LinUCBStub(fixed_alpha=config.PF_ALPHA_DEFAULT) for agent_id in self.agent_ids
         })
-        self.last_known_positions_by_uav_id = {
-            uav.id: np.asarray(uav.position, dtype=float).copy() for uav in self.sim_env.uavs
-        }
 
     def reset(self) -> tuple[dict[int, np.ndarray], dict[str, Any]]:
         env_state = self.sim_env.reset()
@@ -289,9 +327,6 @@ class MultiAgentUavNetEnv:
                 uav_id: decision.gateway_backhaul_capacity_bps for uav_id, decision in routing_table.items()
             },
         )
-        self.last_known_positions_by_uav_id = {
-            uav.id: np.asarray(uav.position, dtype=float).copy() for uav in self.sim_env.uavs
-        }
         observations_by_agent = {
             uav.id: build_local_observation(
                 uav,
@@ -299,7 +334,6 @@ class MultiAgentUavNetEnv:
                 self.sim_env.users,
                 env_state,
                 relay_capacity_matrix_bps=relay_capacity_matrix_bps,
-                last_known_positions_by_uav_id=self.last_known_positions_by_uav_id,
             )
             for uav in self.sim_env.uavs
         }
@@ -319,9 +353,6 @@ class MultiAgentUavNetEnv:
             uav.id: build_linucb_context(uav, self.sim_env.uavs, self.sim_env.users)
             for uav in self.sim_env.uavs
         }
-        previous_known_positions_by_uav_id = {
-            uav_id: position.copy() for uav_id, position in self.last_known_positions_by_uav_id.items()
-        }
         step_result = self.sim_env.step(
             actions_by_uav_id=actions_by_agent,
             alpha_controllers=self.alpha_controllers,
@@ -333,9 +364,6 @@ class MultiAgentUavNetEnv:
         for agent_id, alpha_controller in self.alpha_controllers.items():
             alpha_controller.update(context_by_uav.get(agent_id), team_reward)
 
-        self.last_known_positions_by_uav_id = {
-            uav.id: np.asarray(uav.position, dtype=float).copy() for uav in self.sim_env.uavs
-        }
         observations_by_agent = {
             uav.id: build_local_observation(
                 uav,
@@ -343,7 +371,6 @@ class MultiAgentUavNetEnv:
                 self.sim_env.users,
                 step_result.env_state,
                 relay_capacity_matrix_bps=step_result.relay_service_result.capacity_matrix_bps,
-                last_known_positions_by_uav_id=previous_known_positions_by_uav_id,
             )
             for uav in self.sim_env.uavs
         }
