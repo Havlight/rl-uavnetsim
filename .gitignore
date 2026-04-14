@@ -8,6 +8,7 @@ build/
 *.egg-info/
 demo_outputs/
 demo_outputs_stress/
+runs/
 *.gif
 *.png
 *.json
