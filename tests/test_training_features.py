@@ -336,6 +336,8 @@ def test_load_run_config_accepts_explicit_training_scenario_fields() -> None:
     assert run_config.env.orbit_radius_m == 600.0
     assert run_config.env.user_speed_mean_mps == 3.5
     assert run_config.env.user_distribution == "hotspots"
+    assert run_config.env.spawn_margin == 0.1
+    assert run_config.env.association_min_rate_bps == config.R_MIN
 
 
 def test_build_training_env_prefers_explicit_scenario_fields_over_demo_mode_preset() -> None:
@@ -351,6 +353,8 @@ def test_build_training_env_prefers_explicit_scenario_fields_over_demo_mode_pres
             orbit_radius_m=444.0,
             user_speed_mean_mps=1.25,
             user_distribution="hotspots",
+            spawn_margin=0.02,
+            association_min_rate_bps=9.0e6,
         ),
         observation=ObservationConfig(preset="compact_v1", max_obs_users=4, obs_radius_m=500.0),
         trainer=TrainerConfig(total_frames=8, frames_per_batch=4),
@@ -368,3 +372,8 @@ def test_build_training_env_prefers_explicit_scenario_fields_over_demo_mode_pres
     )
     orbit_radius_m = float(np.linalg.norm(env.sim_env.uavs[1].position[:2] - env.sim_env.uavs[0].position[:2]))
     np.testing.assert_allclose(orbit_radius_m, 444.0)
+    assert env.sim_env.association_min_rate_bps == 9.0e6
+    xs = np.asarray([user.position[0] for user in env.sim_env.users], dtype=float)
+    ys = np.asarray([user.position[1] for user in env.sim_env.users], dtype=float)
+    assert xs.min() >= 0.02 * config.MAP_LENGTH - 1e-6
+    assert ys.min() >= 0.02 * config.MAP_WIDTH - 1e-6

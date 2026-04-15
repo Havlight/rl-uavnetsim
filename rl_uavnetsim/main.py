@@ -41,6 +41,8 @@ class DemoModeConfig:
     relay_capacity_scale: float
     relay_capacity_cap_bps: float | None
     user_distribution: str
+    spawn_margin: float
+    association_min_rate_bps: float
 
 
 def get_demo_mode_config(mode: str) -> DemoModeConfig:
@@ -57,6 +59,8 @@ def get_demo_mode_config(mode: str) -> DemoModeConfig:
             relay_capacity_scale=0.35,
             relay_capacity_cap_bps=None,
             user_distribution="hotspots",
+            spawn_margin=0.1,
+            association_min_rate_bps=config.R_MIN,
         )
     return DemoModeConfig(
         mode="default",
@@ -69,6 +73,8 @@ def get_demo_mode_config(mode: str) -> DemoModeConfig:
         relay_capacity_scale=1.0,
         relay_capacity_cap_bps=None,
         user_distribution="uniform",
+        spawn_margin=0.1,
+        association_min_rate_bps=config.R_MIN,
     )
 
 
@@ -82,8 +88,14 @@ def build_demo_entities(
     orbit_radius_m: float = 220.0,
     user_speed_mean_mps: float = config.USER_SPEED_MEAN,
     user_distribution: str = "uniform",
+    spawn_margin: float = 0.1,
 ) -> tuple[list[UAV], list[GroundUser], list[Satellite], list[GroundBaseStation]]:
     rng = np.random.default_rng(seed)
+    spawn_margin = float(np.clip(spawn_margin, 0.0, 0.49))
+    min_x = spawn_margin * config.MAP_LENGTH
+    max_x = (1.0 - spawn_margin) * config.MAP_LENGTH
+    min_y = spawn_margin * config.MAP_WIDTH
+    max_y = (1.0 - spawn_margin) * config.MAP_WIDTH
 
     gateway_position = np.array([config.MAP_LENGTH / 2.0, config.MAP_WIDTH / 2.0, config.UAV_HEIGHT], dtype=float)
     uavs: list[UAV] = [
@@ -139,13 +151,13 @@ def build_demo_entities(
                 ],
                 dtype=float,
             )
-            position[0] = np.clip(position[0], 0.0, config.MAP_LENGTH)
-            position[1] = np.clip(position[1], 0.0, config.MAP_WIDTH)
+            position[0] = np.clip(position[0], min_x, max_x)
+            position[1] = np.clip(position[1], min_y, max_y)
         else:
             position = np.array(
                 [
-                    rng.uniform(0.1 * config.MAP_LENGTH, 0.9 * config.MAP_LENGTH),
-                    rng.uniform(0.1 * config.MAP_WIDTH, 0.9 * config.MAP_WIDTH),
+                    rng.uniform(min_x, max_x),
+                    rng.uniform(min_y, max_y),
                     0.0,
                 ],
                 dtype=float,
@@ -179,6 +191,8 @@ def run_demo_episode(
     backhaul_type: str = config.BACKHAUL_TYPE,
     deterministic_policy: bool = False,
     demo_mode: str = "default",
+    spawn_margin: float | None = None,
+    association_min_rate_bps: float | None = None,
 ) -> DemoArtifacts:
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -195,6 +209,7 @@ def run_demo_episode(
         orbit_radius_m=mode_config.orbit_radius_m,
         user_speed_mean_mps=mode_config.user_speed_mean_mps,
         user_distribution=mode_config.user_distribution,
+        spawn_margin=mode_config.spawn_margin if spawn_margin is None else float(spawn_margin),
     )
     sim_env = SimEnv(
         uavs=uavs,
@@ -203,6 +218,11 @@ def run_demo_episode(
         ground_base_stations=ground_base_stations,
         gateway_capable_uav_ids=[0],
         backhaul_type=backhaul_type,
+        association_min_rate_bps=(
+            mode_config.association_min_rate_bps
+            if association_min_rate_bps is None
+            else float(association_min_rate_bps)
+        ),
         rng=np.random.default_rng(seed),
     )
     marl_env = MultiAgentUavNetEnv(sim_env, max_steps=num_steps)
@@ -287,6 +307,13 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--backhaul-type", choices=["satellite", "gbs"], default=config.BACKHAUL_TYPE)
     parser.add_argument("--deterministic-policy", action="store_true", help="Use zero-motion stub actions.")
     parser.add_argument("--demo-mode", choices=["default", "stress"], default="default")
+    parser.add_argument("--spawn-margin", type=float, default=None, help="Normalized user spawn margin within the map.")
+    parser.add_argument(
+        "--association-min-rate-bps",
+        type=float,
+        default=None,
+        help="Minimum proxy rate required for user-UAV association feasibility.",
+    )
     return parser
 
 
@@ -301,6 +328,8 @@ def main(argv: list[str] | None = None) -> int:
         backhaul_type=args.backhaul_type,
         deterministic_policy=args.deterministic_policy,
         demo_mode=args.demo_mode,
+        spawn_margin=args.spawn_margin,
+        association_min_rate_bps=args.association_min_rate_bps,
     )
     print(f"Demo complete. Outputs written to: {artifacts.output_dir}")
     print(f"Summary: {artifacts.summary_json_path}")

@@ -69,6 +69,7 @@ class SimEnv:
         ground_base_stations: Sequence[GroundBaseStation] | None = None,
         gateway_capable_uav_ids: Sequence[int] | None = None,
         backhaul_type: str = config.BACKHAUL_TYPE,
+        association_min_rate_bps: float = config.R_MIN,
         rng: np.random.Generator | None = None,
     ) -> None:
         resolved_gateway_capable_uav_ids = self._resolve_gateway_capable_uav_ids(
@@ -77,6 +78,7 @@ class SimEnv:
         )
         self.gateway_capable_uav_ids = tuple(resolved_gateway_capable_uav_ids)
         self.backhaul_type = str(backhaul_type)
+        self.association_min_rate_bps = float(association_min_rate_bps)
         self.rng = rng or np.random.default_rng()
 
         self._initial_uavs = copy.deepcopy(list(uavs))
@@ -146,7 +148,11 @@ class SimEnv:
             user.id: user.add_demand_bits(delta_t_s=config.DELTA_T) for user in self.users
         }
 
-        association_result = associate_users_to_uavs(self.users, self.uavs)
+        association_result = associate_users_to_uavs(
+            self.users,
+            self.uavs,
+            min_rate_bps=self.association_min_rate_bps,
+        )
         access_step_result = run_access_pf_step(
             uavs=self.uavs,
             users=self.users,

@@ -322,7 +322,11 @@ class MultiAgentUavNetEnv:
     def reset(self) -> tuple[dict[int, np.ndarray], dict[str, Any]]:
         self.reward_reference_scales = build_reward_reference_scales(self.sim_env.uavs, self.sim_env.users)
         env_state = self.sim_env.reset()
-        associate_users_to_uavs(self.sim_env.users, self.sim_env.uavs)
+        associate_users_to_uavs(
+            self.sim_env.users,
+            self.sim_env.uavs,
+            min_rate_bps=self.sim_env.association_min_rate_bps,
+        )
         relay_capacity_matrix_bps = build_a2a_capacity_matrix_bps(self.sim_env.uavs)
         adjacency_matrix = build_adjacency_matrix(relay_capacity_matrix_bps)
         lambda2 = algebraic_connectivity_lambda2(adjacency_matrix)
