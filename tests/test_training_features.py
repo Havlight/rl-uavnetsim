@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+from pathlib import Path
 
 import numpy as np
 
@@ -14,8 +15,13 @@ from rl_uavnetsim.training.features import (
     compact_observation_dim,
     compact_state_dim,
 )
-from rl_uavnetsim.training.configuration import EnvConfig, EvalConfig, ModelConfig, ObservationConfig, OutputConfig, RunConfig, TrainerConfig
-from rl_uavnetsim.training.mappo_trainer import run_torchrl_spike
+from rl_uavnetsim.training.configuration import EnvConfig, EvalConfig, ModelConfig, ObservationConfig, OutputConfig, RunConfig, TrainerConfig, load_run_config
+from rl_uavnetsim.training.mappo_trainer import (
+    _build_progress_postfix,
+    _format_best_checkpoint_message,
+    build_training_env,
+    run_torchrl_spike,
+)
 from rl_uavnetsim.training.pettingzoo_env import PettingZooUavNetEnv, decode_movement_action
 
 
@@ -165,6 +171,66 @@ def test_decode_movement_action_maps_unit_box_to_rho_and_psi() -> None:
     assert psi_rad == math.pi
 
 
+def test_build_progress_postfix_includes_core_training_metrics() -> None:
+    postfix = _build_progress_postfix(
+        update_index=2,
+        total_frames=512,
+        batch_reward_mean=1.23456,
+        update_stats={
+            "policy_loss": -0.125,
+            "value_loss": 0.75,
+        },
+    )
+
+    assert postfix == {
+        "upd": "3",
+        "frames": "512",
+        "reward": "1.235",
+        "pi": "-0.125",
+        "v": "0.750",
+        "eval": "-",
+    }
+
+
+def test_build_progress_postfix_includes_eval_mean_reward_when_available() -> None:
+    postfix = _build_progress_postfix(
+        update_index=0,
+        total_frames=64,
+        batch_reward_mean=0.5,
+        update_stats={
+            "policy_loss": 0.25,
+            "value_loss": 1.5,
+        },
+        eval_mean_team_reward=2.3456,
+    )
+
+    assert postfix == {
+        "upd": "1",
+        "frames": "64",
+        "reward": "0.500",
+        "pi": "0.250",
+        "v": "1.500",
+        "eval": "2.346",
+    }
+
+
+def test_format_best_checkpoint_message_includes_reward_and_path() -> None:
+    message = _format_best_checkpoint_message(
+        update_index=4,
+        total_frames=320,
+        mean_team_reward=12.3456,
+        checkpoint_path="runs/demo/checkpoints/best.pt",
+    )
+
+    assert message == (
+        "[best checkpoint improved] "
+        "update=5 "
+        "frames=320 "
+        "eval_mean_reward=12.346 "
+        "path=runs/demo/checkpoints/best.pt"
+    )
+
+
 def test_pettingzoo_wrapper_exposes_compact_spaces_and_agent_ordering() -> None:
     uavs, users, satellites, ground_base_stations = build_demo_entities(
         num_uavs=2,
@@ -259,3 +325,46 @@ def test_torchrl_spike_runs_against_pettingzoo_wrapper() -> None:
     assert spike_summary["state_dim"] == compact_state_dim(2, 3)
     assert spike_summary["actor_output_dim"] == 2
     assert spike_summary["critic_output_dim"] == 1
+
+
+def test_load_run_config_accepts_explicit_training_scenario_fields() -> None:
+    run_config = load_run_config(
+        Path("configs/marl/mappo_satellite_3uav_medium.yaml")
+    )
+
+    assert run_config.env.user_demand_rate_bps == 2.0e6
+    assert run_config.env.orbit_radius_m == 600.0
+    assert run_config.env.user_speed_mean_mps == 3.5
+    assert run_config.env.user_distribution == "hotspots"
+
+
+def test_build_training_env_prefers_explicit_scenario_fields_over_demo_mode_preset() -> None:
+    run_config = RunConfig(
+        seed=31,
+        env=EnvConfig(
+            num_steps=5,
+            num_uavs=3,
+            num_users=6,
+            backhaul_type="satellite",
+            demo_mode="default",
+            user_demand_rate_bps=1.75e6,
+            orbit_radius_m=444.0,
+            user_speed_mean_mps=1.25,
+            user_distribution="hotspots",
+        ),
+        observation=ObservationConfig(preset="compact_v1", max_obs_users=4, obs_radius_m=500.0),
+        trainer=TrainerConfig(total_frames=8, frames_per_batch=4),
+        model=ModelConfig(actor_hidden_dims=(16,), critic_hidden_dims=(16,), activation="tanh"),
+        eval=EvalConfig(num_eval_episodes=1, deterministic_policy=True),
+        output=OutputConfig(root_dir="runs/test", run_name="explicit_scenario"),
+    )
+
+    env = build_training_env(run_config, seed=run_config.seed)
+
+    np.testing.assert_allclose([user.demand_rate_bps for user in env.sim_env.users], 1.75e6)
+    np.testing.assert_allclose(
+        [user.mobility_model.speed_mean_mps for user in env.sim_env.users if user.mobility_model is not None],
+        1.25,
+    )
+    orbit_radius_m = float(np.linalg.norm(env.sim_env.uavs[1].position[:2] - env.sim_env.uavs[0].position[:2]))
+    np.testing.assert_allclose(orbit_radius_m, 444.0)

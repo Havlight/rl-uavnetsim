@@ -25,6 +25,7 @@ try:  # pragma: no cover - runtime dependency gate
     from torch.utils.tensorboard import SummaryWriter
     from torchrl.envs.libs.pettingzoo import PettingZooWrapper
     from torchrl.modules import MultiAgentMLP, TanhNormal
+    from tqdm.auto import tqdm
 except ImportError:  # pragma: no cover
     torch = None
     F = None
@@ -34,10 +35,18 @@ except ImportError:  # pragma: no cover
     PettingZooWrapper = None
     MultiAgentMLP = None
     TanhNormal = None
+    tqdm = None
 
 
 def _require_marl_dependencies() -> None:
-    if torch is None or SummaryWriter is None or PettingZooWrapper is None or MultiAgentMLP is None or TanhNormal is None:
+    if (
+        torch is None
+        or SummaryWriter is None
+        or PettingZooWrapper is None
+        or MultiAgentMLP is None
+        or TanhNormal is None
+        or tqdm is None
+    ):
         raise RuntimeError(
             "TorchRL MAPPO training requires the optional MARL dependencies. "
             "Install them with `pip install -e .[marl]`."
@@ -69,15 +78,35 @@ def build_training_env(run_config: RunConfig, *, seed: int) -> PettingZooUavNetE
         raise ValueError("MAPPO v1 only supports the compact_v1 observation preset.")
 
     demo_mode_config = get_demo_mode_config(run_config.env.demo_mode)
+    user_demand_rate_bps = (
+        float(run_config.env.user_demand_rate_bps)
+        if run_config.env.user_demand_rate_bps is not None
+        else float(demo_mode_config.user_demand_rate_bps)
+    )
+    orbit_radius_m = (
+        float(run_config.env.orbit_radius_m)
+        if run_config.env.orbit_radius_m is not None
+        else float(demo_mode_config.orbit_radius_m)
+    )
+    user_speed_mean_mps = (
+        float(run_config.env.user_speed_mean_mps)
+        if run_config.env.user_speed_mean_mps is not None
+        else float(demo_mode_config.user_speed_mean_mps)
+    )
+    user_distribution = (
+        str(run_config.env.user_distribution)
+        if run_config.env.user_distribution is not None
+        else str(demo_mode_config.user_distribution)
+    )
     uavs, users, satellites, ground_base_stations = build_demo_entities(
         num_uavs=run_config.env.num_uavs,
         num_users=run_config.env.num_users,
         seed=seed,
         backhaul_type=run_config.env.backhaul_type,
-        user_demand_rate_bps=demo_mode_config.user_demand_rate_bps,
-        orbit_radius_m=demo_mode_config.orbit_radius_m,
-        user_speed_mean_mps=demo_mode_config.user_speed_mean_mps,
-        user_distribution=demo_mode_config.user_distribution,
+        user_demand_rate_bps=user_demand_rate_bps,
+        orbit_radius_m=orbit_radius_m,
+        user_speed_mean_mps=user_speed_mean_mps,
+        user_distribution=user_distribution,
     )
     sim_env = SimEnv(
         uavs=uavs,
@@ -481,6 +510,41 @@ def _write_jsonl_record(path: Path, record: dict[str, Any]) -> None:
         handle.write(json.dumps(record, ensure_ascii=True) + "\n")
 
 
+def _build_progress_postfix(
+    *,
+    update_index: int,
+    total_frames: int,
+    batch_reward_mean: float,
+    update_stats: dict[str, float],
+    eval_mean_team_reward: float | None = None,
+) -> dict[str, str]:
+    postfix = {
+        "upd": str(int(update_index) + 1),
+        "frames": str(int(total_frames)),
+        "reward": f"{float(batch_reward_mean):.3f}",
+        "pi": f"{float(update_stats['policy_loss']):.3f}",
+        "v": f"{float(update_stats['value_loss']):.3f}",
+        "eval": f"{float(eval_mean_team_reward):.3f}" if eval_mean_team_reward is not None else "-",
+    }
+    return postfix
+
+
+def _format_best_checkpoint_message(
+    *,
+    update_index: int,
+    total_frames: int,
+    mean_team_reward: float,
+    checkpoint_path: str | Path,
+) -> str:
+    return (
+        f"[best checkpoint improved] "
+        f"update={int(update_index) + 1} "
+        f"frames={int(total_frames)} "
+        f"eval_mean_reward={float(mean_team_reward):.3f} "
+        f"path={checkpoint_path}"
+    )
+
+
 def _checkpoint_payload(
     *,
     actor: SharedGaussianActor,
@@ -647,75 +711,66 @@ def train_mappo(run_config: RunConfig) -> TrainingArtifacts:
     latest_checkpoint_path = run_dir / "checkpoints" / "latest.pt"
     best_checkpoint_path = run_dir / "checkpoints" / "best.pt"
     train_metrics_path = run_dir / "train_metrics.jsonl"
+    progress_bar = tqdm(
+        total=int(run_config.trainer.total_frames),
+        desc="MAPPO train",
+        unit="frame",
+        dynamic_ncols=True,
+        leave=True,
+        bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}{postfix}]",
+    )
 
     eval_artifacts: EvaluationArtifacts | None = None
-    while total_frames < run_config.trainer.total_frames:
-        batch = _collect_batch(
-            env,
-            actor,
-            critic,
-            frames_per_batch=run_config.trainer.frames_per_batch,
-            gamma=run_config.trainer.gamma,
-            gae_lambda=run_config.trainer.gae_lambda,
-            device=device,
-            seed=run_config.seed,
-            update_index=update_index,
-        )
-        total_frames += int(batch["frames_collected"])
-        update_stats = _ppo_update(
-            actor,
-            critic,
-            optimizer,
-            batch,
-            ppo_epochs=run_config.trainer.ppo_epochs,
-            minibatch_size=run_config.trainer.minibatch_size,
-            clip_epsilon=run_config.trainer.clip_epsilon,
-            entropy_coef=run_config.trainer.entropy_coef,
-            value_coef=run_config.trainer.value_coef,
-        )
-        batch_reward_mean = float(np.mean(batch["episode_rewards"])) if batch["episode_rewards"] else 0.0
-        batch_episode_length_mean = float(np.mean(batch["episode_lengths"])) if batch["episode_lengths"] else 0.0
-
-        writer.add_scalar("train/policy_loss", update_stats["policy_loss"], update_index)
-        writer.add_scalar("train/value_loss", update_stats["value_loss"], update_index)
-        writer.add_scalar("train/entropy", update_stats["entropy"], update_index)
-        writer.add_scalar("train/batch_reward_mean", batch_reward_mean, update_index)
-        writer.add_scalar("train/batch_episode_length_mean", batch_episode_length_mean, update_index)
-        writer.add_scalar("train/total_frames", total_frames, update_index)
-
-        record = {
-            "update_index": update_index,
-            "total_frames": total_frames,
-            "policy_loss": update_stats["policy_loss"],
-            "value_loss": update_stats["value_loss"],
-            "entropy": update_stats["entropy"],
-            "batch_reward_mean": batch_reward_mean,
-            "batch_episode_length_mean": batch_episode_length_mean,
-        }
-        _write_jsonl_record(train_metrics_path, record)
-
-        if (update_index + 1) % max(run_config.trainer.checkpoint_interval, 1) == 0:
-            _save_checkpoint(
-                latest_checkpoint_path,
-                _checkpoint_payload(
-                    actor=actor,
-                    critic=critic,
-                    optimizer=optimizer,
-                    run_config=run_config,
-                    total_frames=total_frames,
-                    update_index=update_index,
-                    best_eval_reward=best_eval_reward,
-                ),
+    try:
+        while total_frames < run_config.trainer.total_frames:
+            previous_total_frames = total_frames
+            batch = _collect_batch(
+                env,
+                actor,
+                critic,
+                frames_per_batch=run_config.trainer.frames_per_batch,
+                gamma=run_config.trainer.gamma,
+                gae_lambda=run_config.trainer.gae_lambda,
+                device=device,
+                seed=run_config.seed,
+                update_index=update_index,
             )
+            total_frames += int(batch["frames_collected"])
+            update_stats = _ppo_update(
+                actor,
+                critic,
+                optimizer,
+                batch,
+                ppo_epochs=run_config.trainer.ppo_epochs,
+                minibatch_size=run_config.trainer.minibatch_size,
+                clip_epsilon=run_config.trainer.clip_epsilon,
+                entropy_coef=run_config.trainer.entropy_coef,
+                value_coef=run_config.trainer.value_coef,
+            )
+            batch_reward_mean = float(np.mean(batch["episode_rewards"])) if batch["episode_rewards"] else 0.0
+            batch_episode_length_mean = float(np.mean(batch["episode_lengths"])) if batch["episode_lengths"] else 0.0
 
-        if (update_index + 1) % max(run_config.trainer.eval_interval, 1) == 0:
-            policy = TorchRLMappoPolicy(actor, agent_names=env.possible_agents, device=device)
-            eval_artifacts = evaluate_policy(policy, run_config, output_dir=run_dir / "eval")
-            writer.add_scalar("eval/mean_team_reward", eval_artifacts.mean_team_reward, update_index)
-            if eval_artifacts.mean_team_reward > best_eval_reward:
-                best_eval_reward = eval_artifacts.mean_team_reward
+            writer.add_scalar("train/policy_loss", update_stats["policy_loss"], update_index)
+            writer.add_scalar("train/value_loss", update_stats["value_loss"], update_index)
+            writer.add_scalar("train/entropy", update_stats["entropy"], update_index)
+            writer.add_scalar("train/batch_reward_mean", batch_reward_mean, update_index)
+            writer.add_scalar("train/batch_episode_length_mean", batch_episode_length_mean, update_index)
+            writer.add_scalar("train/total_frames", total_frames, update_index)
+
+            record = {
+                "update_index": update_index,
+                "total_frames": total_frames,
+                "policy_loss": update_stats["policy_loss"],
+                "value_loss": update_stats["value_loss"],
+                "entropy": update_stats["entropy"],
+                "batch_reward_mean": batch_reward_mean,
+                "batch_episode_length_mean": batch_episode_length_mean,
+            }
+            _write_jsonl_record(train_metrics_path, record)
+
+            if (update_index + 1) % max(run_config.trainer.checkpoint_interval, 1) == 0:
                 _save_checkpoint(
-                    best_checkpoint_path,
+                    latest_checkpoint_path,
                     _checkpoint_payload(
                         actor=actor,
                         critic=critic,
@@ -727,14 +782,77 @@ def train_mappo(run_config: RunConfig) -> TrainingArtifacts:
                     ),
                 )
 
-        update_index += 1
+            eval_mean_team_reward: float | None = None
+            if (update_index + 1) % max(run_config.trainer.eval_interval, 1) == 0:
+                policy = TorchRLMappoPolicy(actor, agent_names=env.possible_agents, device=device)
+                eval_artifacts = evaluate_policy(policy, run_config, output_dir=run_dir / "eval")
+                eval_mean_team_reward = eval_artifacts.mean_team_reward
+                writer.add_scalar("eval/mean_team_reward", eval_artifacts.mean_team_reward, update_index)
+                if eval_artifacts.mean_team_reward > best_eval_reward:
+                    best_eval_reward = eval_artifacts.mean_team_reward
+                    _save_checkpoint(
+                        best_checkpoint_path,
+                        _checkpoint_payload(
+                            actor=actor,
+                            critic=critic,
+                            optimizer=optimizer,
+                            run_config=run_config,
+                            total_frames=total_frames,
+                            update_index=update_index,
+                            best_eval_reward=best_eval_reward,
+                        ),
+                    )
+                    tqdm.write(
+                        _format_best_checkpoint_message(
+                            update_index=update_index,
+                            total_frames=total_frames,
+                            mean_team_reward=best_eval_reward,
+                            checkpoint_path=best_checkpoint_path,
+                        )
+                    )
 
-    if eval_artifacts is None:
-        policy = TorchRLMappoPolicy(actor, agent_names=env.possible_agents, device=device)
-        eval_artifacts = evaluate_policy(policy, run_config, output_dir=run_dir / "eval")
-        best_eval_reward = eval_artifacts.mean_team_reward
+            displayed_increment = min(
+                total_frames,
+                int(run_config.trainer.total_frames),
+            ) - previous_total_frames
+            displayed_total_frames = min(
+                total_frames,
+                int(run_config.trainer.total_frames),
+            )
+            if displayed_increment > 0:
+                progress_bar.update(displayed_increment)
+            progress_bar.set_postfix(
+                _build_progress_postfix(
+                    update_index=update_index,
+                    total_frames=displayed_total_frames,
+                    batch_reward_mean=batch_reward_mean,
+                    update_stats=update_stats,
+                    eval_mean_team_reward=eval_mean_team_reward,
+                ),
+                refresh=False,
+            )
+
+            update_index += 1
+
+        if eval_artifacts is None:
+            policy = TorchRLMappoPolicy(actor, agent_names=env.possible_agents, device=device)
+            eval_artifacts = evaluate_policy(policy, run_config, output_dir=run_dir / "eval")
+            best_eval_reward = eval_artifacts.mean_team_reward
+            _save_checkpoint(
+                best_checkpoint_path,
+                _checkpoint_payload(
+                    actor=actor,
+                    critic=critic,
+                    optimizer=optimizer,
+                    run_config=run_config,
+                    total_frames=total_frames,
+                    update_index=update_index,
+                    best_eval_reward=best_eval_reward,
+                ),
+            )
+
         _save_checkpoint(
-            best_checkpoint_path,
+            latest_checkpoint_path,
             _checkpoint_payload(
                 actor=actor,
                 critic=critic,
@@ -745,21 +863,10 @@ def train_mappo(run_config: RunConfig) -> TrainingArtifacts:
                 best_eval_reward=best_eval_reward,
             ),
         )
-
-    _save_checkpoint(
-        latest_checkpoint_path,
-        _checkpoint_payload(
-            actor=actor,
-            critic=critic,
-            optimizer=optimizer,
-            run_config=run_config,
-            total_frames=total_frames,
-            update_index=update_index,
-            best_eval_reward=best_eval_reward,
-        ),
-    )
-    writer.close()
-    env.close()
+    finally:
+        progress_bar.close()
+        writer.close()
+        env.close()
 
     return TrainingArtifacts(
         run_dir=run_dir,

@@ -29,6 +29,7 @@ marl = [
   "torchrl>=0.8",
   "tensordict>=0.8",
   "tensorboard>=2.16",
+  "tqdm>=4.66",
 ]
 
 [tool.setuptools.packages.find]

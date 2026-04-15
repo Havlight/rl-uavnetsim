@@ -5,7 +5,10 @@ env:
   num_uavs: 5
   num_users: 60
   backhaul_type: satellite
-  demo_mode: default
+  user_demand_rate_bps: 0.5e6
+  orbit_radius_m: 220.0
+  user_speed_mean_mps: 2.0
+  user_distribution: uniform
 
 observation:
   preset: compact_v1

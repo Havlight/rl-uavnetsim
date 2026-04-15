@@ -20,6 +20,14 @@ from rl_uavnetsim.rl_interface.linucb_stub import LinUCBStub
 from rl_uavnetsim.utils.helpers import euclidean_distance_2d, euclidean_distance_3d
 
 
+@dataclass(frozen=True)
+class RewardReferenceScales:
+    throughput_ref_bits: float = config.THROUGHPUT_REF_BITS
+    energy_ref_j: float = config.ENERGY_REF_J
+    access_backlog_ref_bits: float = config.ACCESS_BACKLOG_REF_BITS
+    relay_queue_ref_bits: float = config.RELAY_QUEUE_REF_BITS
+
+
 def _safe_norm(value: float, reference: float) -> float:
     return float(value) / max(float(reference), config.EPSILON)
 
@@ -67,6 +75,19 @@ def count_safety_violations(uavs: Sequence[UAV], d_safe_m: float = config.D_SAFE
             if euclidean_distance_3d(source_uav.position, target_uav.position) < float(d_safe_m):
                 violations += 1
     return violations
+
+
+def build_reward_reference_scales(
+    uavs: Sequence[UAV],
+    users: Sequence[GroundUser],
+) -> RewardReferenceScales:
+    total_arrival_bits_per_step = float(sum(user.demand_rate_bps for user in users)) * float(config.DELTA_T)
+    return RewardReferenceScales(
+        throughput_ref_bits=max(total_arrival_bits_per_step, config.EPSILON),
+        energy_ref_j=max(float(len(uavs)) * float(config.E_HOVER) * float(config.DELTA_T), config.EPSILON),
+        access_backlog_ref_bits=max(total_arrival_bits_per_step, config.EPSILON),
+        relay_queue_ref_bits=max(total_arrival_bits_per_step, config.EPSILON),
+    )
 
 
 def build_linucb_context(uav: UAV, uavs: Sequence[UAV], users: Sequence[GroundUser]) -> np.ndarray:
@@ -240,13 +261,26 @@ def build_local_observation(
     )
 
 
-def compute_team_reward(step_result: SimStepResult, uavs: Sequence[UAV], users: Sequence[GroundUser]) -> float:
-    throughput_norm = _safe_norm(step_result.env_state.total_delivered_bits_step, config.THROUGHPUT_REF_BITS)
+def compute_team_reward(
+    step_result: SimStepResult,
+    uavs: Sequence[UAV],
+    users: Sequence[GroundUser],
+    *,
+    reward_reference_scales: RewardReferenceScales | None = None,
+) -> float:
+    reward_reference_scales = reward_reference_scales or RewardReferenceScales()
+    throughput_norm = _safe_norm(step_result.env_state.total_delivered_bits_step, reward_reference_scales.throughput_ref_bits)
     total_energy_step_j = float(sum(step_result.accounting.energy_used_j_by_uav.values()))
-    energy_norm = _safe_norm(total_energy_step_j, config.ENERGY_REF_J)
+    energy_norm = _safe_norm(total_energy_step_j, reward_reference_scales.energy_ref_j)
     outage_ratio = float(sum(user.final_rate_bps < config.R_MIN for user in users)) / max(len(users), 1)
-    access_backlog_norm = _safe_norm(sum(user.user_access_backlog_bits for user in users), config.ACCESS_BACKLOG_REF_BITS)
-    relay_queue_norm = _safe_norm(sum(uav.relay_queue_total_bits for uav in uavs), config.RELAY_QUEUE_REF_BITS)
+    access_backlog_norm = _safe_norm(
+        sum(user.user_access_backlog_bits for user in users),
+        reward_reference_scales.access_backlog_ref_bits,
+    )
+    relay_queue_norm = _safe_norm(
+        sum(uav.relay_queue_total_bits for uav in uavs),
+        reward_reference_scales.relay_queue_ref_bits,
+    )
     num_safety_violations = count_safety_violations(uavs)
 
     return (
@@ -280,11 +314,13 @@ class MultiAgentUavNetEnv:
         self.sim_env = sim_env
         self.max_steps = int(max_steps)
         self.agent_ids = [uav.id for uav in self.sim_env.uavs]
+        self.reward_reference_scales = build_reward_reference_scales(self.sim_env.uavs, self.sim_env.users)
         self.alpha_controllers = dict(alpha_controllers or {
             agent_id: LinUCBStub(fixed_alpha=config.PF_ALPHA_DEFAULT) for agent_id in self.agent_ids
         })
 
     def reset(self) -> tuple[dict[int, np.ndarray], dict[str, Any]]:
+        self.reward_reference_scales = build_reward_reference_scales(self.sim_env.uavs, self.sim_env.users)
         env_state = self.sim_env.reset()
         associate_users_to_uavs(self.sim_env.users, self.sim_env.uavs)
         relay_capacity_matrix_bps = build_a2a_capacity_matrix_bps(self.sim_env.uavs)
@@ -360,7 +396,12 @@ class MultiAgentUavNetEnv:
             **sim_step_kwargs,
         )
 
-        team_reward = compute_team_reward(step_result, self.sim_env.uavs, self.sim_env.users)
+        team_reward = compute_team_reward(
+            step_result,
+            self.sim_env.uavs,
+            self.sim_env.users,
+            reward_reference_scales=self.reward_reference_scales,
+        )
         for agent_id, alpha_controller in self.alpha_controllers.items():
             alpha_controller.update(context_by_uav.get(agent_id), team_reward)
 

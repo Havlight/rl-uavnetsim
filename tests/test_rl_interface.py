@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+from types import SimpleNamespace
 
 import numpy as np
 
@@ -14,6 +15,8 @@ from rl_uavnetsim.rl_interface import (
     build_global_state,
     build_local_observation,
 )
+from rl_uavnetsim.rl_interface.mdp import RewardReferenceScales, build_reward_reference_scales, compute_team_reward
+from rl_uavnetsim.training.configuration import load_run_config
 
 
 def _make_env_state(*, adjacency_matrix: np.ndarray, active_gateway_uav_ids: tuple[int, ...] = ()) -> EnvState:
@@ -112,6 +115,79 @@ def test_multi_agent_env_reset_and_step_share_team_reward() -> None:
     assert terminated_by_agent["__all__"] is False
     assert truncated_by_agent["__all__"] is False
     assert set(step_info["alpha_by_uav"]) == {0, 1}
+
+
+def test_build_reward_reference_scales_matches_env_shape_and_traffic() -> None:
+    uavs = [
+        UAV(id=0, position=np.array([0.0, 0.0, config.UAV_HEIGHT]), velocity=np.zeros(2), speed=0.0, direction=0.0),
+        UAV(id=1, position=np.array([50.0, 0.0, config.UAV_HEIGHT]), velocity=np.zeros(2), speed=0.0, direction=0.0),
+        UAV(id=2, position=np.array([100.0, 0.0, config.UAV_HEIGHT]), velocity=np.zeros(2), speed=0.0, direction=0.0),
+    ]
+    users = [
+        GroundUser(id=0, position=np.array([0.0, 0.0, 0.0]), velocity=np.zeros(2), speed=0.0, demand_rate_bps=2.0e6),
+        GroundUser(id=1, position=np.array([10.0, 0.0, 0.0]), velocity=np.zeros(2), speed=0.0, demand_rate_bps=2.0e6),
+    ]
+
+    reward_refs = build_reward_reference_scales(uavs, users)
+
+    assert reward_refs == RewardReferenceScales(
+        throughput_ref_bits=4.0e6,
+        energy_ref_j=3 * config.E_HOVER * config.DELTA_T,
+        access_backlog_ref_bits=4.0e6,
+        relay_queue_ref_bits=4.0e6,
+    )
+
+
+def test_compute_team_reward_accepts_run_aware_reward_reference_scales() -> None:
+    user = GroundUser(
+        id=0,
+        position=np.array([0.0, 0.0, 0.0]),
+        velocity=np.zeros(2),
+        speed=0.0,
+        demand_rate_bps=2.0e6,
+        final_rate_bps=2.0e6,
+        user_access_backlog_bits=0.0,
+    )
+    uav = UAV(
+        id=0,
+        position=np.array([0.0, 0.0, config.UAV_HEIGHT]),
+        velocity=np.zeros(2),
+        speed=0.0,
+        direction=0.0,
+        relay_queue_bits_by_user={},
+    )
+    step_result = SimpleNamespace(
+        env_state=EnvState(
+            current_step=1,
+            adjacency_matrix=np.zeros((1, 1), dtype=int),
+            lambda2=1.0,
+            backhaul_capacity_bps=2.0e6,
+            total_delivered_bits_step=2.0e6,
+            active_gateway_uav_ids=(0,),
+            routing_next_hop_by_uav={0: None},
+            reachable_gateway_count_by_uav={0: 1},
+            backhaul_capacity_bps_by_gateway={0: 2.0e6},
+            best_gateway_path_capacity_bps_by_uav={0: 2.0e6},
+            best_gateway_backhaul_capacity_bps_by_uav={0: 2.0e6},
+        ),
+        accounting=SimpleNamespace(
+            energy_used_j_by_uav={0: config.E_HOVER * config.DELTA_T},
+        ),
+    )
+
+    reward = compute_team_reward(
+        step_result,
+        [uav],
+        [user],
+        reward_reference_scales=RewardReferenceScales(
+            throughput_ref_bits=2.0e6,
+            energy_ref_j=config.E_HOVER * config.DELTA_T,
+            access_backlog_ref_bits=2.0e6,
+            relay_queue_ref_bits=2.0e6,
+        ),
+    )
+
+    assert reward == 0.9
 
 
 def test_build_local_observation_uses_normalized_absolute_geometry() -> None:
@@ -299,3 +375,10 @@ def test_build_global_state_returns_normalized_geometry_and_gateway_masks() -> N
 
 def test_default_observation_dim_matches_absolute_geometry_contract() -> None:
     assert config.OBS_DIM == 126
+
+
+def test_medium_training_config_uses_episode_aligned_batches_and_more_eval_episodes() -> None:
+    run_config = load_run_config("configs/marl/mappo_satellite_3uav_medium.yaml")
+
+    assert run_config.trainer.frames_per_batch == 300
+    assert run_config.eval.num_eval_episodes == 5

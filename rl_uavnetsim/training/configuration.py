@@ -30,6 +30,10 @@ class EnvConfig:
     num_users: int = config.NUM_USERS
     backhaul_type: str = "satellite"
     demo_mode: str = "default"
+    user_demand_rate_bps: float | None = None
+    orbit_radius_m: float | None = None
+    user_speed_mean_mps: float | None = None
+    user_distribution: str | None = None
 
 
 @dataclass(frozen=True)
@@ -110,6 +114,26 @@ def run_config_from_dict(payload: dict[str, Any]) -> RunConfig:
             num_users=int(env_payload.get("num_users", EnvConfig.num_users)),
             backhaul_type=str(env_payload.get("backhaul_type", EnvConfig.backhaul_type)),
             demo_mode=str(env_payload.get("demo_mode", EnvConfig.demo_mode)),
+            user_demand_rate_bps=(
+                float(env_payload["user_demand_rate_bps"])
+                if "user_demand_rate_bps" in env_payload
+                else EnvConfig.user_demand_rate_bps
+            ),
+            orbit_radius_m=(
+                float(env_payload["orbit_radius_m"])
+                if "orbit_radius_m" in env_payload
+                else EnvConfig.orbit_radius_m
+            ),
+            user_speed_mean_mps=(
+                float(env_payload["user_speed_mean_mps"])
+                if "user_speed_mean_mps" in env_payload
+                else EnvConfig.user_speed_mean_mps
+            ),
+            user_distribution=(
+                str(env_payload["user_distribution"])
+                if "user_distribution" in env_payload
+                else EnvConfig.user_distribution
+            ),
         ),
         observation=ObservationConfig(
             preset=str(observation_payload.get("preset", ObservationConfig.preset)),

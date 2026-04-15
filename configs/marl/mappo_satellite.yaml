@@ -5,7 +5,10 @@ env:
   num_uavs: 5
   num_users: 60
   backhaul_type: satellite
-  demo_mode: default
+  user_demand_rate_bps: 0.5e6
+  orbit_radius_m: 220.0
+  user_speed_mean_mps: 2.0
+  user_distribution: uniform
 
 observation:
   preset: compact_v1
@@ -23,7 +26,7 @@ trainer:
   entropy_coef: 0.0
   value_coef: 0.5
   lr: 0.0003
-  device: cpu
+  device: cuda
   checkpoint_interval: 1
   eval_interval: 1
 
