@@ -98,6 +98,16 @@ def build_training_env(run_config: RunConfig, *, seed: int) -> PettingZooUavNetE
         if run_config.env.user_distribution is not None
         else str(demo_mode_config.user_distribution)
     )
+    spawn_margin = (
+        float(run_config.env.spawn_margin)
+        if run_config.env.spawn_margin is not None
+        else float(demo_mode_config.spawn_margin)
+    )
+    association_min_rate_bps = (
+        float(run_config.env.association_min_rate_bps)
+        if run_config.env.association_min_rate_bps is not None
+        else float(demo_mode_config.association_min_rate_bps)
+    )
     uavs, users, satellites, ground_base_stations = build_demo_entities(
         num_uavs=run_config.env.num_uavs,
         num_users=run_config.env.num_users,
@@ -107,6 +117,7 @@ def build_training_env(run_config: RunConfig, *, seed: int) -> PettingZooUavNetE
         orbit_radius_m=orbit_radius_m,
         user_speed_mean_mps=user_speed_mean_mps,
         user_distribution=user_distribution,
+        spawn_margin=spawn_margin,
     )
     sim_env = SimEnv(
         uavs=uavs,
@@ -115,6 +126,7 @@ def build_training_env(run_config: RunConfig, *, seed: int) -> PettingZooUavNetE
         ground_base_stations=ground_base_stations,
         gateway_capable_uav_ids=[0],
         backhaul_type=run_config.env.backhaul_type,
+        association_min_rate_bps=association_min_rate_bps,
         rng=np.random.default_rng(seed),
     )
     return PettingZooUavNetEnv(

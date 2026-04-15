@@ -9,6 +9,8 @@ env:
   orbit_radius_m: 220.0
   user_speed_mean_mps: 2.0
   user_distribution: uniform
+  spawn_margin: 0.1
+  association_min_rate_bps: 0.5e6
 
 observation:
   preset: compact_v1

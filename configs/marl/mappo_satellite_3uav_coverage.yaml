@@ -8,9 +8,9 @@ env:
   user_demand_rate_bps: 2.0e6
   orbit_radius_m: 600.0
   user_speed_mean_mps: 3.5
-  user_distribution: hotspots
-  spawn_margin: 0.1
-  association_min_rate_bps: 0.5e6
+  user_distribution: uniform
+  spawn_margin: 0.02
+  association_min_rate_bps: 14.0e6
 
 observation:
   preset: compact_v1
@@ -43,4 +43,4 @@ eval:
 
 output:
   root_dir: runs
-  run_name: mappo_satellite_3uav_medium
+  run_name: mappo_satellite_3uav_coverage

@@ -34,6 +34,8 @@ class EnvConfig:
     orbit_radius_m: float | None = None
     user_speed_mean_mps: float | None = None
     user_distribution: str | None = None
+    spawn_margin: float | None = None
+    association_min_rate_bps: float | None = None
 
 
 @dataclass(frozen=True)
@@ -133,6 +135,16 @@ def run_config_from_dict(payload: dict[str, Any]) -> RunConfig:
                 str(env_payload["user_distribution"])
                 if "user_distribution" in env_payload
                 else EnvConfig.user_distribution
+            ),
+            spawn_margin=(
+                float(env_payload["spawn_margin"])
+                if "spawn_margin" in env_payload
+                else EnvConfig.spawn_margin
+            ),
+            association_min_rate_bps=(
+                float(env_payload["association_min_rate_bps"])
+                if "association_min_rate_bps" in env_payload
+                else EnvConfig.association_min_rate_bps
             ),
         ),
         observation=ObservationConfig(
