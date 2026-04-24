@@ -99,6 +99,8 @@ class UAV:
         psi_rad: float,
         delta_t_s: float = config.DELTA_T,
         v_max_mps: float = config.V_MAX,
+        x_bounds_m: tuple[float, float] = (0.0, config.MAP_LENGTH),
+        y_bounds_m: tuple[float, float] = (0.0, config.MAP_WIDTH),
     ) -> tuple[np.ndarray, float, float]:
         delta_t_s = float(delta_t_s)
         rho_norm = clamp(float(rho_norm), 0.0, 1.0)
@@ -108,8 +110,8 @@ class UAV:
         dy_m = requested_distance_m * math.sin(float(psi_rad))
 
         next_position = self.position.copy()
-        next_position[0] = clamp(next_position[0] + dx_m, 0.0, config.MAP_LENGTH)
-        next_position[1] = clamp(next_position[1] + dy_m, 0.0, config.MAP_WIDTH)
+        next_position[0] = clamp(next_position[0] + dx_m, float(x_bounds_m[0]), float(x_bounds_m[1]))
+        next_position[1] = clamp(next_position[1] + dy_m, float(y_bounds_m[0]), float(y_bounds_m[1]))
         next_position[2] = self.position[2]
 
         actual_distance_m = float(np.linalg.norm(next_position[:2] - self.position[:2]))

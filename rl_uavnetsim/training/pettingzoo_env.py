@@ -9,7 +9,8 @@ import numpy as np
 from rl_uavnetsim import config
 from rl_uavnetsim.environment import EnvState, SimEnv
 from rl_uavnetsim.rl_interface import MultiAgentUavNetEnv
-from rl_uavnetsim.training.features import build_compact_local_observation, build_compact_state, compact_observation_dim, compact_state_dim
+from rl_uavnetsim.scenario import ScenarioGeometry
+from rl_uavnetsim.training.observation_presets import get_observation_preset
 
 try:  # pragma: no cover - exercised when optional MARL deps are installed
     from gymnasium import spaces
@@ -55,18 +56,30 @@ class PettingZooUavNetEnv(PettingZooParallelEnv):
         max_steps: int = config.SIM_STEPS,
         max_obs_users: int = 15,
         obs_radius_m: float = config.OBS_RADIUS,
+        observation_preset: str = "compact_v1",
+        geometry: ScenarioGeometry | None = None,
+        reward_config: Any | None = None,
     ) -> None:
         self.sim_env = sim_env
         self.max_steps = int(max_steps)
         self.max_obs_users = int(max_obs_users)
         self.obs_radius_m = float(obs_radius_m)
+        self.geometry = geometry or ScenarioGeometry(
+            map_length_m=getattr(sim_env, "map_length_m", config.MAP_LENGTH),
+            map_width_m=getattr(sim_env, "map_width_m", config.MAP_WIDTH),
+        )
+        self.observation_preset = get_observation_preset(observation_preset)
         self.agent_name_mapping = {uav.id: f"uav_{uav.id}" for uav in self.sim_env.uavs}
         self.possible_agents = [self.agent_name_mapping[uav.id] for uav in sorted(self.sim_env.uavs, key=lambda item: item.id)]
         self.agents = list(self.possible_agents)
         self.agent_ids = [uav.id for uav in sorted(self.sim_env.uavs, key=lambda item: item.id)]
-        self._marl_env = MultiAgentUavNetEnv(self.sim_env, max_steps=max_steps)
-        self._observation_dim = compact_observation_dim(len(self.agent_ids), self.max_obs_users)
-        self._state_dim = compact_state_dim(len(self.agent_ids), len(self.sim_env.users))
+        self._marl_env = MultiAgentUavNetEnv(
+            self.sim_env,
+            max_steps=max_steps,
+            reward_config=reward_config,
+        )
+        self._observation_dim = self.observation_preset.observation_dim(len(self.agent_ids), self.max_obs_users)
+        self._state_dim = self.observation_preset.state_dim(len(self.agent_ids), len(self.sim_env.users))
         self._observation_space = _box(-np.inf, np.inf, (self._observation_dim,), np.float32)
         self._action_space = _box(-1.0, 1.0, (2,), np.float32)
         self.state_space = _box(-np.inf, np.inf, (self._state_dim,), np.float32)
@@ -138,20 +151,24 @@ class PettingZooUavNetEnv(PettingZooParallelEnv):
         return observations, rewards, terminations, truncations, infos
 
     def state(self) -> np.ndarray:
-        return build_compact_state(self.sim_env.uavs, self.sim_env.users).astype(np.float32, copy=False)
+        return self.observation_preset.state_builder(
+            self.sim_env.uavs,
+            self.sim_env.users,
+            self.geometry,
+        ).astype(np.float32, copy=False)
 
     def close(self) -> None:
         self.agents = []
 
     def _build_observations(self, env_state: EnvState) -> dict[str, np.ndarray]:
-        del env_state
         return {
-            self.agent_name_mapping[uav.id]: build_compact_local_observation(
+            self.agent_name_mapping[uav.id]: self.observation_preset.observation_builder(
                 uav,
                 self.sim_env.uavs,
                 self.sim_env.users,
-                max_obs_users=self.max_obs_users,
-                obs_radius_m=self.obs_radius_m,
+                self.max_obs_users,
+                self.obs_radius_m,
+                self.geometry,
             ).astype(np.float32, copy=False)
             for uav in sorted(self.sim_env.uavs, key=lambda item: item.id)
         }

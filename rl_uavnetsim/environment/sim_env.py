@@ -70,6 +70,8 @@ class SimEnv:
         gateway_capable_uav_ids: Sequence[int] | None = None,
         backhaul_type: str = config.BACKHAUL_TYPE,
         association_min_rate_bps: float = config.R_MIN,
+        map_length_m: float = config.MAP_LENGTH,
+        map_width_m: float = config.MAP_WIDTH,
         rng: np.random.Generator | None = None,
     ) -> None:
         resolved_gateway_capable_uav_ids = self._resolve_gateway_capable_uav_ids(
@@ -79,6 +81,10 @@ class SimEnv:
         self.gateway_capable_uav_ids = tuple(resolved_gateway_capable_uav_ids)
         self.backhaul_type = str(backhaul_type)
         self.association_min_rate_bps = float(association_min_rate_bps)
+        self.map_length_m = float(map_length_m)
+        self.map_width_m = float(map_width_m)
+        if self.map_length_m <= 0.0 or self.map_width_m <= 0.0:
+            raise ValueError("SimEnv map dimensions must be positive.")
         self.rng = rng or np.random.default_rng()
 
         self._initial_uavs = copy.deepcopy(list(uavs))
@@ -273,6 +279,8 @@ class SimEnv:
                 rho_norm=float(action.get("rho", 0.0)),
                 psi_rad=float(action.get("psi", uav.direction)),
                 delta_t_s=config.DELTA_T,
+                x_bounds_m=(0.0, self.map_length_m),
+                y_bounds_m=(0.0, self.map_width_m),
             )
             energy_used_j_by_uav[uav.id] = energy_used_j
         return energy_used_j_by_uav

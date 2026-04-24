@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import math
+import shutil
+import tempfile
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
@@ -13,6 +15,7 @@ from rl_uavnetsim import config
 from rl_uavnetsim.environment import SimEnv
 from rl_uavnetsim.main import build_demo_entities, get_demo_mode_config
 from rl_uavnetsim.metrics import MetricsCollector
+from rl_uavnetsim.scenario import ScenarioGeometry
 from rl_uavnetsim.training.configuration import RunConfig, run_config_from_dict, run_config_to_dict, save_run_config
 from rl_uavnetsim.training.pettingzoo_env import PettingZooUavNetEnv
 from rl_uavnetsim.visualization import MetricsPlotter, TrajectoryVisualizer, build_visualization_frame
@@ -74,9 +77,11 @@ def set_global_seeds(seed: int) -> None:
 def build_training_env(run_config: RunConfig, *, seed: int) -> PettingZooUavNetEnv:
     if run_config.env.backhaul_type != "satellite":
         raise ValueError("MAPPO v1 only supports satellite backhaul.")
-    if run_config.observation.preset != "compact_v1":
-        raise ValueError("MAPPO v1 only supports the compact_v1 observation preset.")
 
+    geometry = ScenarioGeometry(
+        map_length_m=run_config.env.map_length_m,
+        map_width_m=run_config.env.map_width_m,
+    )
     demo_mode_config = get_demo_mode_config(run_config.env.demo_mode)
     user_demand_rate_bps = (
         float(run_config.env.user_demand_rate_bps)
@@ -118,6 +123,8 @@ def build_training_env(run_config: RunConfig, *, seed: int) -> PettingZooUavNetE
         user_speed_mean_mps=user_speed_mean_mps,
         user_distribution=user_distribution,
         spawn_margin=spawn_margin,
+        map_length_m=geometry.map_length_m,
+        map_width_m=geometry.map_width_m,
     )
     sim_env = SimEnv(
         uavs=uavs,
@@ -127,6 +134,8 @@ def build_training_env(run_config: RunConfig, *, seed: int) -> PettingZooUavNetE
         gateway_capable_uav_ids=[0],
         backhaul_type=run_config.env.backhaul_type,
         association_min_rate_bps=association_min_rate_bps,
+        map_length_m=geometry.map_length_m,
+        map_width_m=geometry.map_width_m,
         rng=np.random.default_rng(seed),
     )
     return PettingZooUavNetEnv(
@@ -134,6 +143,9 @@ def build_training_env(run_config: RunConfig, *, seed: int) -> PettingZooUavNetE
         max_steps=run_config.env.num_steps,
         max_obs_users=run_config.observation.max_obs_users,
         obs_radius_m=run_config.observation.obs_radius_m,
+        observation_preset=run_config.observation.preset,
+        geometry=geometry,
+        reward_config=run_config.reward,
     )
 
 
@@ -250,6 +262,23 @@ class TorchRLMappoPolicy:
         return {
             agent_name: action_tensor[index]
             for index, agent_name in enumerate(self.agent_names)
+        }
+
+
+class StaticMovementPolicy:
+    def __init__(self, *, agent_names: list[str]) -> None:
+        self.agent_names = list(agent_names)
+
+    def act(
+        self,
+        observations_by_agent: dict[str, np.ndarray],
+        *,
+        deterministic: bool = True,
+    ) -> dict[str, np.ndarray]:
+        del observations_by_agent, deterministic
+        return {
+            agent_name: np.asarray([-1.0, 0.0], dtype=np.float32)
+            for agent_name in self.agent_names
         }
 
 
@@ -590,93 +619,344 @@ def _build_backhaul_node_position(env: PettingZooUavNetEnv) -> np.ndarray | None
     return None
 
 
-def evaluate_policy(
-    policy: TorchRLMappoPolicy,
-    run_config: RunConfig,
-    *,
-    output_dir: str | Path,
-) -> EvaluationArtifacts:
-    output_dir = Path(output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
+def _json_dump(path: Path, payload: Any) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as handle:
+        json.dump(payload, handle, indent=2)
+    return path
 
-    metrics_collector = MetricsCollector()
+
+def _numeric_stats(values: list[float]) -> dict[str, float]:
+    if not values:
+        return {"mean": 0.0, "std": 0.0, "min": 0.0, "max": 0.0}
+    value_array = np.asarray(values, dtype=float)
+    return {
+        "mean": float(value_array.mean()),
+        "std": float(value_array.std(ddof=0)),
+        "min": float(value_array.min()),
+        "max": float(value_array.max()),
+    }
+
+
+def _initial_movement_diagnostics(env: PettingZooUavNetEnv) -> dict[str, Any]:
+    start_positions = {uav.id: uav.position.copy() for uav in env.sim_env.uavs}
+    return {
+        "start_positions": start_positions,
+        "path_length_m_by_agent": {uav.id: 0.0 for uav in env.sim_env.uavs},
+        "rho_values": [],
+        "psi_values": [],
+    }
+
+
+def _record_movement_diagnostics(
+    diagnostics: dict[str, Any],
+    *,
+    env: PettingZooUavNetEnv,
+    positions_before_step: dict[int, np.ndarray],
+) -> None:
+    for uav in env.sim_env.uavs:
+        diagnostics["path_length_m_by_agent"][uav.id] += float(
+            np.linalg.norm(uav.position[:2] - positions_before_step[uav.id][:2])
+        )
+    for action in env.last_actions_by_uav_id.values():
+        diagnostics["rho_values"].append(float(action["rho"]))
+        diagnostics["psi_values"].append(float(action["psi"]))
+
+
+def _movement_summary(diagnostics: dict[str, Any], env: PettingZooUavNetEnv) -> dict[str, Any]:
+    net_displacement_m_by_agent = {
+        f"uav_{uav.id}": float(np.linalg.norm(uav.position[:2] - diagnostics["start_positions"][uav.id][:2]))
+        for uav in env.sim_env.uavs
+    }
+    path_length_m_by_agent = {
+        f"uav_{uav_id}": float(path_length_m)
+        for uav_id, path_length_m in diagnostics["path_length_m_by_agent"].items()
+    }
+    rho_values = [float(value) for value in diagnostics["rho_values"]]
+    psi_values = [float(value) for value in diagnostics["psi_values"]]
+    path_lengths = list(path_length_m_by_agent.values())
+    net_displacements = list(net_displacement_m_by_agent.values())
+    return {
+        "path_length_m_by_agent": path_length_m_by_agent,
+        "net_displacement_m_by_agent": net_displacement_m_by_agent,
+        "mean_path_length_m": float(np.mean(path_lengths)) if path_lengths else 0.0,
+        "mean_net_displacement_m": float(np.mean(net_displacements)) if net_displacements else 0.0,
+        "rho": _numeric_stats(rho_values),
+        "psi": _numeric_stats(psi_values),
+    }
+
+
+def _aggregate_policy_summaries(episode_summaries: list[dict[str, Any]]) -> dict[str, Any]:
+    team_rewards = [float(summary["team_reward"]) for summary in episode_summaries]
+    metric_keys = [
+        "mean_sum_throughput_bps",
+        "mean_coverage_ratio",
+        "mean_outage_ratio",
+        "mean_jain_fairness",
+        "total_energy_j",
+        "energy_efficiency_bits_per_j",
+        "mean_lambda2",
+        "final_total_user_access_backlog_bits",
+        "final_total_uav_relay_queue_bits",
+        "demand_satisfaction_ratio",
+        "cumulative_delivered_bits",
+        "cumulative_arrived_bits",
+    ]
+    metrics = {
+        key: _numeric_stats([float(summary["metrics"][key]) for summary in episode_summaries])
+        for key in metric_keys
+    }
+    movement = {
+        "mean_path_length_m": _numeric_stats(
+            [float(summary["movement"]["mean_path_length_m"]) for summary in episode_summaries]
+        ),
+        "mean_net_displacement_m": _numeric_stats(
+            [float(summary["movement"]["mean_net_displacement_m"]) for summary in episode_summaries]
+        ),
+        "rho": _numeric_stats(
+            [float(summary["movement"]["rho"]["mean"]) for summary in episode_summaries]
+        ),
+        "psi": _numeric_stats(
+            [float(summary["movement"]["psi"]["mean"]) for summary in episode_summaries]
+        ),
+    }
+    policy_summary = {
+        "num_episodes": len(episode_summaries),
+        "mean_team_reward": _numeric_stats(team_rewards)["mean"],
+        "std_team_reward": _numeric_stats(team_rewards)["std"],
+        "min_team_reward": _numeric_stats(team_rewards)["min"],
+        "max_team_reward": _numeric_stats(team_rewards)["max"],
+        "episode_team_rewards": team_rewards,
+        "metrics": metrics,
+        "movement": movement,
+    }
+    for key, stats in metrics.items():
+        policy_summary[key] = stats["mean"]
+    return policy_summary
+
+
+def _run_policy_episodes(
+    *,
+    policy: TorchRLMappoPolicy | StaticMovementPolicy,
+    run_config: RunConfig,
+    policy_name: str,
+    output_dir: Path,
+    write_artifacts: bool,
+) -> tuple[dict[str, Any], list[list[dict[str, Any]]], dict[str, Path]]:
     metrics_plotter = MetricsPlotter()
     trajectory_visualizer = TrajectoryVisualizer()
-    team_rewards: list[float] = []
-    visualization_frames = []
+    episode_summaries: list[dict[str, Any]] = []
+    episode_histories: list[list[dict[str, Any]]] = []
+    metric_png_paths: dict[str, Path] = {}
+    episode_root = output_dir / "episodes" if policy_name == "trained" else output_dir / policy_name / "episodes"
 
     for episode_index in range(int(run_config.eval.num_eval_episodes)):
         env = build_training_env(run_config, seed=run_config.seed + 100_000 + episode_index)
         observations_by_agent, _ = env.reset(seed=run_config.seed + 100_000 + episode_index)
+        metrics_collector = MetricsCollector(outage_threshold_bps=run_config.reward.outage_threshold_bps)
         episode_team_reward = 0.0
         episode_frames: list[Any] = []
         backhaul_node_position = _build_backhaul_node_position(env)
+        movement_diagnostics = _initial_movement_diagnostics(env)
 
         while env.agents:
+            positions_before_step = {uav.id: uav.position.copy() for uav in env.sim_env.uavs}
             actions_by_agent = policy.act(
                 observations_by_agent,
                 deterministic=run_config.eval.deterministic_policy,
             )
             observations_by_agent, rewards, terminations, truncations, _ = env.step(actions_by_agent)
+            _record_movement_diagnostics(
+                movement_diagnostics,
+                env=env,
+                positions_before_step=positions_before_step,
+            )
             if env.latest_step_info is None or env.latest_env_state is None:
                 raise RuntimeError("Evaluation step did not expose step information.")
             step_result = env.latest_step_info["step_result"]
             metrics_collector.record(step_result, env.sim_env.uavs, env.sim_env.users)
             episode_team_reward += float(rewards[env.possible_agents[0]])
-            episode_frames.append(
-                build_visualization_frame(
-                    step_result,
-                    env.sim_env.uavs,
-                    env.sim_env.users,
-                    gateway_uav_ids=env.latest_env_state.active_gateway_uav_ids,
-                    backhaul_type=env.sim_env.backhaul_type,
-                    backhaul_node_position=backhaul_node_position,
+            if write_artifacts:
+                episode_frames.append(
+                    build_visualization_frame(
+                        step_result,
+                        env.sim_env.uavs,
+                        env.sim_env.users,
+                        gateway_uav_ids=env.latest_env_state.active_gateway_uav_ids,
+                        backhaul_type=env.sim_env.backhaul_type,
+                        backhaul_node_position=backhaul_node_position,
+                        map_length_m=env.sim_env.map_length_m,
+                        map_width_m=env.sim_env.map_width_m,
+                    )
                 )
-            )
             if all(terminations.values()) or all(truncations.values()):
                 break
 
-        if episode_index == 0:
-            visualization_frames = episode_frames
-        team_rewards.append(episode_team_reward)
+        metrics_summary = metrics_collector.summarize()
+        episode_summary = {
+            "schema_version": 2,
+            "policy": policy_name,
+            "episode_index": episode_index,
+            "team_reward": float(episode_team_reward),
+            "metrics": asdict(metrics_summary),
+            "movement": _movement_summary(movement_diagnostics, env),
+        }
+        episode_summaries.append(episode_summary)
+        episode_history = metrics_collector.export_history()
+        episode_histories.append(episode_history)
+
+        if write_artifacts:
+            episode_dir = episode_root / f"episode_{episode_index:03d}"
+            _json_dump(episode_dir / "summary.json", episode_summary)
+            _json_dump(episode_dir / "metrics_history.json", episode_history)
+            metrics_plotter.plot_metric_set(metrics_collector.step_records, episode_dir / "plots")
+            if episode_frames:
+                trajectory_visualizer.render_frame(
+                    episode_frames,
+                    frame_index=len(episode_frames) - 1,
+                    output_png_path=episode_dir / "trajectory_final.png",
+                )
+                trajectory_visualizer.create_gif(
+                    episode_frames,
+                    output_gif_path=episode_dir / "trajectory.gif",
+                )
         env.close()
 
-    if not visualization_frames:
-        raise RuntimeError("Evaluation did not produce any visualization frames.")
+    policy_summary = _aggregate_policy_summaries(episode_summaries)
+    policy_summary["episode_summaries"] = episode_summaries
+    if write_artifacts:
+        plot_dir = output_dir / "plots" if policy_name == "trained" else output_dir / policy_name / "plots"
+        metric_png_paths = metrics_plotter.plot_episode_metric_set(episode_histories, plot_dir)
+    return policy_summary, episode_histories, metric_png_paths
 
-    metrics_summary = metrics_collector.summarize()
-    summary_payload = {
-        **asdict(metrics_summary),
-        "mean_team_reward": float(np.mean(team_rewards)) if team_rewards else 0.0,
-        "episode_team_rewards": [float(value) for value in team_rewards],
+
+def _write_evaluation_payload(
+    *,
+    policy: TorchRLMappoPolicy,
+    run_config: RunConfig,
+    output_dir: Path,
+    run_static_baseline: bool,
+    write_static_artifacts: bool,
+) -> EvaluationArtifacts:
+    trained_summary, trained_histories, metric_png_paths = _run_policy_episodes(
+        policy=policy,
+        run_config=run_config,
+        policy_name="trained",
+        output_dir=output_dir,
+        write_artifacts=True,
+    )
+
+    static_summary: dict[str, Any] | None = None
+    static_histories: list[list[dict[str, Any]]] = []
+    if run_static_baseline:
+        static_policy = StaticMovementPolicy(agent_names=policy.agent_names)
+        static_summary, static_histories, _ = _run_policy_episodes(
+            policy=static_policy,
+            run_config=run_config,
+            policy_name="static",
+            output_dir=output_dir,
+            write_artifacts=write_static_artifacts,
+        )
+
+    comparison = {
+        "trained_minus_static_reward": None,
+        "static_baseline_not_beaten": None,
     }
-    summary_json_path = output_dir / "summary.json"
-    with summary_json_path.open("w", encoding="utf-8") as handle:
-        json.dump(summary_payload, handle, indent=2)
+    if static_summary is not None:
+        delta = float(trained_summary["mean_team_reward"]) - float(static_summary["mean_team_reward"])
+        comparison = {
+            "trained_minus_static_reward": delta,
+            "static_baseline_not_beaten": bool(delta <= 0.0),
+        }
 
-    metrics_history_json_path = output_dir / "metrics_history.json"
-    with metrics_history_json_path.open("w", encoding="utf-8") as handle:
-        json.dump(metrics_collector.export_history(), handle, indent=2)
-
-    metric_png_paths = metrics_plotter.plot_metric_set(metrics_collector.step_records, output_dir / "plots")
-    trajectory_png_path = trajectory_visualizer.render_frame(
-        visualization_frames,
-        frame_index=len(visualization_frames) - 1,
-        output_png_path=output_dir / "trajectory_final.png",
+    summary_payload = {
+        "schema_version": 2,
+        "num_eval_episodes": int(run_config.eval.num_eval_episodes),
+        "policies": {
+            "trained": trained_summary,
+            "static": static_summary,
+        },
+        "comparison": comparison,
+    }
+    summary_json_path = _json_dump(output_dir / "summary.json", summary_payload)
+    metrics_history_json_path = _json_dump(
+        output_dir / "metrics_history.json",
+        {
+            "schema_version": 2,
+            "policies": {
+                "trained": trained_histories,
+                "static": static_histories if run_static_baseline else None,
+            },
+        },
     )
-    trajectory_gif_path = trajectory_visualizer.create_gif(
-        visualization_frames,
-        output_gif_path=output_dir / "trajectory.gif",
-    )
-
     return EvaluationArtifacts(
         output_dir=output_dir,
         summary_json_path=summary_json_path,
         metrics_history_json_path=metrics_history_json_path,
-        trajectory_png_path=trajectory_png_path,
-        trajectory_gif_path=trajectory_gif_path,
+        trajectory_png_path=output_dir / "episodes" / "episode_000" / "trajectory_final.png",
+        trajectory_gif_path=output_dir / "episodes" / "episode_000" / "trajectory.gif",
         metric_png_paths=metric_png_paths,
-        mean_team_reward=float(summary_payload["mean_team_reward"]),
+        mean_team_reward=float(trained_summary["mean_team_reward"]),
+    )
+
+
+def _copy_clean_directory(source_dir: Path, target_dir: Path) -> None:
+    if target_dir.exists():
+        shutil.rmtree(target_dir)
+    if source_dir.exists():
+        shutil.copytree(source_dir, target_dir)
+
+
+def evaluate_policy(
+    policy: TorchRLMappoPolicy,
+    run_config: RunConfig,
+    *,
+    output_dir: str | Path,
+    run_static_baseline: bool | None = None,
+    write_static_artifacts: bool | None = None,
+) -> EvaluationArtifacts:
+    output_dir = Path(output_dir)
+    output_dir.parent.mkdir(parents=True, exist_ok=True)
+    temp_dir = Path(tempfile.mkdtemp(prefix=f".{output_dir.name}.tmp-", dir=output_dir.parent))
+    completed = False
+    try:
+        _write_evaluation_payload(
+            policy=policy,
+            run_config=run_config,
+            output_dir=temp_dir,
+            run_static_baseline=(
+                run_config.eval.run_static_baseline
+                if run_static_baseline is None
+                else bool(run_static_baseline)
+            ),
+            write_static_artifacts=(
+                run_config.eval.write_static_artifacts
+                if write_static_artifacts is None
+                else bool(write_static_artifacts)
+            ),
+        )
+        if output_dir.exists():
+            shutil.rmtree(output_dir)
+        temp_dir.rename(output_dir)
+        completed = True
+    finally:
+        if not completed and temp_dir.exists():
+            shutil.rmtree(temp_dir, ignore_errors=True)
+
+    summary_path = output_dir / "summary.json"
+    with summary_path.open("r", encoding="utf-8") as handle:
+        summary_payload = json.load(handle)
+    return EvaluationArtifacts(
+        output_dir=output_dir,
+        summary_json_path=summary_path,
+        metrics_history_json_path=output_dir / "metrics_history.json",
+        trajectory_png_path=output_dir / "episodes" / "episode_000" / "trajectory_final.png",
+        trajectory_gif_path=output_dir / "episodes" / "episode_000" / "trajectory.gif",
+        metric_png_paths={
+            path.stem: path
+            for path in sorted((output_dir / "plots").glob("*.png"))
+        },
+        mean_team_reward=float(summary_payload["policies"]["trained"]["mean_team_reward"]),
     )
 
 
@@ -797,7 +1077,13 @@ def train_mappo(run_config: RunConfig) -> TrainingArtifacts:
             eval_mean_team_reward: float | None = None
             if (update_index + 1) % max(run_config.trainer.eval_interval, 1) == 0:
                 policy = TorchRLMappoPolicy(actor, agent_names=env.possible_agents, device=device)
-                eval_artifacts = evaluate_policy(policy, run_config, output_dir=run_dir / "eval")
+                eval_artifacts = evaluate_policy(
+                    policy,
+                    run_config,
+                    output_dir=run_dir / "eval" / "latest",
+                    run_static_baseline=run_config.eval.run_static_baseline,
+                    write_static_artifacts=False,
+                )
                 eval_mean_team_reward = eval_artifacts.mean_team_reward
                 writer.add_scalar("eval/mean_team_reward", eval_artifacts.mean_team_reward, update_index)
                 if eval_artifacts.mean_team_reward > best_eval_reward:
@@ -822,6 +1108,7 @@ def train_mappo(run_config: RunConfig) -> TrainingArtifacts:
                             checkpoint_path=best_checkpoint_path,
                         )
                     )
+                    _copy_clean_directory(run_dir / "eval" / "latest", run_dir / "eval" / "best")
 
             displayed_increment = min(
                 total_frames,
@@ -848,7 +1135,13 @@ def train_mappo(run_config: RunConfig) -> TrainingArtifacts:
 
         if eval_artifacts is None:
             policy = TorchRLMappoPolicy(actor, agent_names=env.possible_agents, device=device)
-            eval_artifacts = evaluate_policy(policy, run_config, output_dir=run_dir / "eval")
+            eval_artifacts = evaluate_policy(
+                policy,
+                run_config,
+                output_dir=run_dir / "eval" / "latest",
+                run_static_baseline=run_config.eval.run_static_baseline,
+                write_static_artifacts=False,
+            )
             best_eval_reward = eval_artifacts.mean_team_reward
             _save_checkpoint(
                 best_checkpoint_path,
@@ -862,6 +1155,7 @@ def train_mappo(run_config: RunConfig) -> TrainingArtifacts:
                     best_eval_reward=best_eval_reward,
                 ),
             )
+            _copy_clean_directory(run_dir / "eval" / "latest", run_dir / "eval" / "best")
 
         _save_checkpoint(
             latest_checkpoint_path,

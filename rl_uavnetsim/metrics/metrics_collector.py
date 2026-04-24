@@ -54,7 +54,8 @@ def jain_fairness_index(values: Sequence[float]) -> float:
 
 
 class MetricsCollector:
-    def __init__(self) -> None:
+    def __init__(self, *, outage_threshold_bps: float = config.R_MIN) -> None:
+        self.outage_threshold_bps = float(outage_threshold_bps)
         self.step_records: list[StepMetricsRecord] = []
 
     def reset(self) -> None:
@@ -72,7 +73,7 @@ class MetricsCollector:
         total_user_access_backlog_bits = float(sum(user.user_access_backlog_bits for user in users))
         total_uav_relay_queue_bits = float(sum(uav.relay_queue_total_bits for uav in uavs))
         associated_user_count = sum(user.associated_uav_id >= 0 for user in users)
-        outage_user_count = sum(user.final_rate_bps < config.R_MIN for user in users)
+        outage_user_count = sum(user.final_rate_bps < self.outage_threshold_bps for user in users)
 
         record = StepMetricsRecord(
             current_step=step_result.env_state.current_step,
