@@ -15,7 +15,7 @@ from rl_uavnetsim.rl_interface import (
     build_global_state,
     build_local_observation,
 )
-from rl_uavnetsim.rl_interface.mdp import RewardReferenceScales, build_reward_reference_scales, compute_team_reward
+from rl_uavnetsim.rl_interface.mdp import RewardReferenceScales, TeamRewardConfig, build_reward_reference_scales, compute_team_reward
 from rl_uavnetsim.training.configuration import load_run_config
 
 
@@ -188,6 +188,66 @@ def test_compute_team_reward_accepts_run_aware_reward_reference_scales() -> None
     )
 
     assert reward == 0.9
+
+
+def test_compute_team_reward_uses_runtime_reward_config() -> None:
+    user = GroundUser(
+        id=0,
+        position=np.array([0.0, 0.0, 0.0]),
+        velocity=np.zeros(2),
+        speed=0.0,
+        final_rate_bps=1.0e6,
+        associated_uav_id=-1,
+        user_access_backlog_bits=0.0,
+    )
+    uav = UAV(
+        id=0,
+        position=np.array([0.0, 0.0, config.UAV_HEIGHT]),
+        velocity=np.zeros(2),
+        speed=0.0,
+        direction=0.0,
+    )
+    step_result = SimpleNamespace(
+        env_state=EnvState(
+            current_step=1,
+            adjacency_matrix=np.zeros((1, 1), dtype=int),
+            lambda2=1.0,
+            backhaul_capacity_bps=2.0e6,
+            total_delivered_bits_step=2.0e6,
+            active_gateway_uav_ids=(0,),
+            routing_next_hop_by_uav={0: None},
+            reachable_gateway_count_by_uav={0: 1},
+            backhaul_capacity_bps_by_gateway={0: 2.0e6},
+            best_gateway_path_capacity_bps_by_uav={0: 2.0e6},
+            best_gateway_backhaul_capacity_bps_by_uav={0: 2.0e6},
+        ),
+        accounting=SimpleNamespace(energy_used_j_by_uav={0: 0.0}),
+    )
+
+    reward = compute_team_reward(
+        step_result,
+        [uav],
+        [user],
+        reward_reference_scales=RewardReferenceScales(
+            throughput_ref_bits=2.0e6,
+            energy_ref_j=1.0,
+            access_backlog_ref_bits=2.0e6,
+            relay_queue_ref_bits=2.0e6,
+        ),
+        reward_config=TeamRewardConfig(
+            energy_coef=0.0,
+            outage_coef=2.0,
+            access_backlog_coef=0.0,
+            relay_queue_coef=0.0,
+            connectivity_coef=0.0,
+            safety_coef=0.0,
+            outage_threshold_bps=2.0e6,
+            target_coverage=1.0,
+            coverage_gap_coef=3.0,
+        ),
+    )
+
+    assert reward == -4.0
 
 
 def test_build_local_observation_uses_normalized_absolute_geometry() -> None:

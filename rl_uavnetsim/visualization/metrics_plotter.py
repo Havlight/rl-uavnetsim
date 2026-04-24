@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Sequence
 
 import matplotlib
+import numpy as np
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
@@ -88,6 +89,68 @@ class MetricsPlotter:
         )
         return outputs
 
+    def plot_episode_metric_set(
+        self,
+        episode_histories: Sequence[Sequence[dict[str, float | int]]],
+        output_dir: str | Path,
+    ) -> dict[str, Path]:
+        output_dir = Path(output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        metric_specs = {
+            "throughput": ("sum_throughput_bps", "Sum Throughput", "Mbps", 1.0e-6, "tab:blue"),
+            "outage": ("outage_ratio", "Outage Ratio", "ratio", 1.0, "tab:red"),
+            "fairness": ("jain_fairness", "Jain Fairness", "index", 1.0, "tab:green"),
+            "coverage": ("coverage_ratio", "Coverage Ratio", "ratio", 1.0, "tab:purple"),
+            "lambda2": ("lambda2", "Algebraic Connectivity", "lambda2", 1.0, "tab:olive"),
+            "demand_satisfaction": (
+                "demand_satisfaction_ratio",
+                "Demand Satisfaction Ratio",
+                "ratio",
+                1.0,
+                "tab:brown",
+            ),
+            "energy_efficiency": (
+                "energy_efficiency_bits_per_j",
+                "Energy Efficiency",
+                "bits/J",
+                1.0,
+                "tab:cyan",
+            ),
+        }
+        outputs: dict[str, Path] = {}
+        for output_name, (metric_key, title, ylabel, scale, color) in metric_specs.items():
+            outputs[output_name] = self._plot_episode_metric(
+                episode_histories,
+                metric_key,
+                output_dir / f"{output_name}.png",
+                title=title,
+                ylabel=ylabel,
+                scale=scale,
+                color=color,
+            )
+
+        outputs["backlog_queue"] = self._plot_episode_two_metrics(
+            episode_histories,
+            "total_user_access_backlog_bits",
+            "total_uav_relay_queue_bits",
+            output_dir / "backlog_queue.png",
+            title="Access Backlog / Relay Queue",
+            ylabel="Gbits",
+            scale=1.0e-9,
+            labels=("Access backlog", "Relay queue"),
+            colors=("tab:orange", "tab:gray"),
+        )
+        outputs["energy"] = self._plot_episode_metric(
+            episode_histories,
+            "total_energy_j",
+            output_dir / "energy_j.png",
+            title="Total Energy",
+            ylabel="J",
+            scale=1.0,
+            color="tab:pink",
+        )
+        return outputs
+
     def plot_step_metrics(
         self,
         step_records: Sequence[StepMetricsRecord],
@@ -150,6 +213,74 @@ class MetricsPlotter:
         axis.set_xlabel("Step")
         axis.set_ylabel(ylabel)
         axis.grid(True, alpha=0.3)
+        fig.savefig(output_png_path, dpi=160)
+        plt.close(fig)
+        return output_png_path
+
+    def _plot_episode_metric(
+        self,
+        episode_histories: Sequence[Sequence[dict[str, float | int]]],
+        metric_key: str,
+        output_png_path: Path,
+        *,
+        title: str,
+        ylabel: str,
+        scale: float,
+        color: str,
+    ) -> Path:
+        fig, axis = plt.subplots(figsize=(7, 4), constrained_layout=True)
+        max_len = max((len(history) for history in episode_histories), default=0)
+        value_matrix = np.full((len(episode_histories), max_len), np.nan, dtype=float)
+        for episode_index, history in enumerate(episode_histories):
+            steps = [int(record["current_step"]) for record in history]
+            values = [float(record[metric_key]) * scale for record in history]
+            axis.plot(steps, values, color=color, alpha=0.22, linewidth=1.0)
+            value_matrix[episode_index, : len(values)] = values
+        if max_len > 0:
+            mean_values = np.nanmean(value_matrix, axis=0)
+            axis.plot(range(1, max_len + 1), mean_values, color=color, linewidth=2.6, label="episode mean")
+            axis.legend()
+        axis.set_title(title)
+        axis.set_xlabel("Step")
+        axis.set_ylabel(ylabel)
+        axis.grid(True, alpha=0.3)
+        fig.savefig(output_png_path, dpi=160)
+        plt.close(fig)
+        return output_png_path
+
+    def _plot_episode_two_metrics(
+        self,
+        episode_histories: Sequence[Sequence[dict[str, float | int]]],
+        metric_key_a: str,
+        metric_key_b: str,
+        output_png_path: Path,
+        *,
+        title: str,
+        ylabel: str,
+        scale: float,
+        labels: tuple[str, str],
+        colors: tuple[str, str],
+    ) -> Path:
+        fig, axis = plt.subplots(figsize=(7, 4), constrained_layout=True)
+        for metric_key, label, color in (
+            (metric_key_a, labels[0], colors[0]),
+            (metric_key_b, labels[1], colors[1]),
+        ):
+            max_len = max((len(history) for history in episode_histories), default=0)
+            value_matrix = np.full((len(episode_histories), max_len), np.nan, dtype=float)
+            for episode_index, history in enumerate(episode_histories):
+                steps = [int(record["current_step"]) for record in history]
+                values = [float(record[metric_key]) * scale for record in history]
+                axis.plot(steps, values, color=color, alpha=0.20, linewidth=1.0)
+                value_matrix[episode_index, : len(values)] = values
+            if max_len > 0:
+                mean_values = np.nanmean(value_matrix, axis=0)
+                axis.plot(range(1, max_len + 1), mean_values, color=color, linewidth=2.6, label=f"{label} mean")
+        axis.set_title(title)
+        axis.set_xlabel("Step")
+        axis.set_ylabel(ylabel)
+        axis.grid(True, alpha=0.3)
+        axis.legend()
         fig.savefig(output_png_path, dpi=160)
         plt.close(fig)
         return output_png_path

@@ -112,8 +112,8 @@ def test_visualization_frame_tracks_gateway_ids_from_env_state() -> None:
         position=np.array([40.0, 0.0, 0.0]),
         velocity=np.zeros(2),
         speed=0.0,
-        demand_rate_bps=1_000.0,
-        user_access_backlog_bits=1_000.0,
+        demand_rate_bps=1_000_000.0,
+        user_access_backlog_bits=1_000_000.0,
     )
     satellite = Satellite(id=0)
     env = SimEnv(
@@ -138,3 +138,36 @@ def test_visualization_frame_tracks_gateway_ids_from_env_state() -> None:
     )
 
     assert frame.gateway_uav_ids == step_result.env_state.active_gateway_uav_ids
+
+
+def test_metrics_collector_uses_runtime_outage_threshold() -> None:
+    gateway = UAV(
+        id=0,
+        position=np.array([0.0, 0.0, config.UAV_HEIGHT]),
+        velocity=np.zeros(2),
+        speed=0.0,
+        direction=0.0,
+        is_gateway_capable=True,
+    )
+    user = GroundUser(
+        id=1,
+        position=np.array([10.0, 0.0, 0.0]),
+        velocity=np.zeros(2),
+        speed=0.0,
+        demand_rate_bps=1_000_000.0,
+        user_access_backlog_bits=1_000_000.0,
+    )
+    env = SimEnv(
+        uavs=[gateway],
+        users=[user],
+        satellites=[Satellite(id=0)],
+        gateway_capable_uav_ids=[gateway.id],
+        backhaul_type="satellite",
+    )
+    step_result = env.step(backhaul_capacity_bps_override=1_000_000.0)
+
+    default_record = MetricsCollector().record(step_result, env.uavs, env.users)
+    strict_record = MetricsCollector(outage_threshold_bps=2_000_000.0).record(step_result, env.uavs, env.users)
+
+    assert default_record.outage_ratio == 0.0
+    assert strict_record.outage_ratio == 1.0

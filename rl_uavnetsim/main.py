@@ -15,6 +15,7 @@ from rl_uavnetsim.metrics import EpisodeMetricsSummary, MetricsCollector
 from rl_uavnetsim.mobility import RandomWalkMobility
 from rl_uavnetsim.rl_interface import MAPPOStub, MultiAgentUavNetEnv
 from rl_uavnetsim.network import build_a2a_capacity_matrix_bps
+from rl_uavnetsim.scenario import ScenarioGeometry
 from rl_uavnetsim.visualization import MetricsPlotter, TrajectoryVisualizer, build_visualization_frame
 
 
@@ -89,15 +90,18 @@ def build_demo_entities(
     user_speed_mean_mps: float = config.USER_SPEED_MEAN,
     user_distribution: str = "uniform",
     spawn_margin: float = 0.1,
+    map_length_m: float = config.MAP_LENGTH,
+    map_width_m: float = config.MAP_WIDTH,
 ) -> tuple[list[UAV], list[GroundUser], list[Satellite], list[GroundBaseStation]]:
     rng = np.random.default_rng(seed)
+    geometry = ScenarioGeometry(map_length_m=float(map_length_m), map_width_m=float(map_width_m))
     spawn_margin = float(np.clip(spawn_margin, 0.0, 0.49))
-    min_x = spawn_margin * config.MAP_LENGTH
-    max_x = (1.0 - spawn_margin) * config.MAP_LENGTH
-    min_y = spawn_margin * config.MAP_WIDTH
-    max_y = (1.0 - spawn_margin) * config.MAP_WIDTH
+    min_x = spawn_margin * geometry.map_length_m
+    max_x = (1.0 - spawn_margin) * geometry.map_length_m
+    min_y = spawn_margin * geometry.map_width_m
+    max_y = (1.0 - spawn_margin) * geometry.map_width_m
 
-    gateway_position = np.array([config.MAP_LENGTH / 2.0, config.MAP_WIDTH / 2.0, config.UAV_HEIGHT], dtype=float)
+    gateway_position = np.array([geometry.center_xy[0], geometry.center_xy[1], config.UAV_HEIGHT], dtype=float)
     uavs: list[UAV] = [
         UAV(
             id=0,
@@ -120,8 +124,8 @@ def build_demo_entities(
             ],
             dtype=float,
         )
-        position[0] = np.clip(position[0], 0.0, config.MAP_LENGTH)
-        position[1] = np.clip(position[1], 0.0, config.MAP_WIDTH)
+        position[0] = np.clip(position[0], *geometry.x_bounds_m)
+        position[1] = np.clip(position[1], *geometry.y_bounds_m)
         uavs.append(
             UAV(
                 id=uav_id,
@@ -135,9 +139,9 @@ def build_demo_entities(
 
     users: list[GroundUser] = []
     hotspot_centers = [
-        np.array([0.25 * config.MAP_LENGTH, 0.30 * config.MAP_WIDTH, 0.0], dtype=float),
-        np.array([0.72 * config.MAP_LENGTH, 0.32 * config.MAP_WIDTH, 0.0], dtype=float),
-        np.array([0.58 * config.MAP_LENGTH, 0.72 * config.MAP_WIDTH, 0.0], dtype=float),
+        np.array([0.25 * geometry.map_length_m, 0.30 * geometry.map_width_m, 0.0], dtype=float),
+        np.array([0.72 * geometry.map_length_m, 0.32 * geometry.map_width_m, 0.0], dtype=float),
+        np.array([0.58 * geometry.map_length_m, 0.72 * geometry.map_width_m, 0.0], dtype=float),
     ]
     hotspot_spread_m = 180.0
     for user_id in range(int(num_users)):
@@ -172,12 +176,16 @@ def build_demo_entities(
                 velocity=velocity,
                 speed=speed_mps,
                 demand_rate_bps=user_demand_rate_bps,
-                mobility_model=RandomWalkMobility(speed_mean_mps=user_speed_mean_mps),
+                mobility_model=RandomWalkMobility(
+                    x_bounds_m=geometry.x_bounds_m,
+                    y_bounds_m=geometry.y_bounds_m,
+                    speed_mean_mps=user_speed_mean_mps,
+                ),
             )
         )
 
-    satellites = [Satellite(id=0)] if backhaul_type == "satellite" else []
-    ground_base_stations = [GroundBaseStation(id=0)] if backhaul_type == "gbs" else []
+    satellites = [Satellite(id=0, position=geometry.satellite_position)] if backhaul_type == "satellite" else []
+    ground_base_stations = [GroundBaseStation(id=0, position=geometry.ground_base_station_position)] if backhaul_type == "gbs" else []
     return uavs, users, satellites, ground_base_stations
 
 
@@ -193,6 +201,8 @@ def run_demo_episode(
     demo_mode: str = "default",
     spawn_margin: float | None = None,
     association_min_rate_bps: float | None = None,
+    map_length_m: float = config.MAP_LENGTH,
+    map_width_m: float = config.MAP_WIDTH,
 ) -> DemoArtifacts:
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -210,6 +220,8 @@ def run_demo_episode(
         user_speed_mean_mps=mode_config.user_speed_mean_mps,
         user_distribution=mode_config.user_distribution,
         spawn_margin=mode_config.spawn_margin if spawn_margin is None else float(spawn_margin),
+        map_length_m=map_length_m,
+        map_width_m=map_width_m,
     )
     sim_env = SimEnv(
         uavs=uavs,
@@ -223,6 +235,8 @@ def run_demo_episode(
             if association_min_rate_bps is None
             else float(association_min_rate_bps)
         ),
+        map_length_m=map_length_m,
+        map_width_m=map_width_m,
         rng=np.random.default_rng(seed),
     )
     marl_env = MultiAgentUavNetEnv(sim_env, max_steps=num_steps)
@@ -260,6 +274,8 @@ def run_demo_episode(
                 gateway_uav_ids=step_result.env_state.active_gateway_uav_ids,
                 backhaul_type=backhaul_type,
                 backhaul_node_position=backhaul_node_position,
+                map_length_m=map_length_m,
+                map_width_m=map_width_m,
             )
         )
         if terminated_by_agent["__all__"] or truncated_by_agent["__all__"]:
@@ -308,6 +324,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--deterministic-policy", action="store_true", help="Use zero-motion stub actions.")
     parser.add_argument("--demo-mode", choices=["default", "stress"], default="default")
     parser.add_argument("--spawn-margin", type=float, default=None, help="Normalized user spawn margin within the map.")
+    parser.add_argument("--map-length-m", type=float, default=config.MAP_LENGTH, help="Scenario map length in meters.")
+    parser.add_argument("--map-width-m", type=float, default=config.MAP_WIDTH, help="Scenario map width in meters.")
     parser.add_argument(
         "--association-min-rate-bps",
         type=float,
@@ -330,6 +348,8 @@ def main(argv: list[str] | None = None) -> int:
         demo_mode=args.demo_mode,
         spawn_margin=args.spawn_margin,
         association_min_rate_bps=args.association_min_rate_bps,
+        map_length_m=args.map_length_m,
+        map_width_m=args.map_width_m,
     )
     print(f"Demo complete. Outputs written to: {artifacts.output_dir}")
     print(f"Summary: {artifacts.summary_json_path}")

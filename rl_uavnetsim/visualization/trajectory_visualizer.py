@@ -37,6 +37,8 @@ class VisualizationFrame:
     gateway_capable_uav_ids: tuple[int, ...]
     backhaul_type: str | None = None
     backhaul_node_position: np.ndarray | None = None
+    map_length_m: float = config.MAP_LENGTH
+    map_width_m: float = config.MAP_WIDTH
 
 
 def build_visualization_frame(
@@ -47,6 +49,8 @@ def build_visualization_frame(
     gateway_uav_ids: Sequence[int] | None = None,
     backhaul_type: str | None = None,
     backhaul_node_position: np.ndarray | None = None,
+    map_length_m: float = config.MAP_LENGTH,
+    map_width_m: float = config.MAP_WIDTH,
 ) -> VisualizationFrame:
     resolved_gateway_uav_ids = tuple(
         int(gateway_uav_id)
@@ -87,6 +91,8 @@ def build_visualization_frame(
         ),
         backhaul_type=backhaul_type,
         backhaul_node_position=None if backhaul_node_position is None else np.asarray(backhaul_node_position, dtype=float),
+        map_length_m=float(map_length_m),
+        map_width_m=float(map_width_m),
     )
 
 
@@ -145,8 +151,8 @@ class TrajectoryVisualizer:
         axis.set_xlabel("X (m)")
         axis.set_ylabel("Y (m)")
         axis.set_zlabel("Z (m)")
-        axis.set_xlim(0, config.MAP_LENGTH)
-        axis.set_ylim(0, config.MAP_WIDTH)
+        axis.set_xlim(0, current_frame.map_length_m)
+        axis.set_ylim(0, current_frame.map_width_m)
         axis.set_zlim(0, max(config.UAV_HEIGHT * 1.5, 150.0))
 
         trajectory_by_uav_id: dict[int, np.ndarray] = {}

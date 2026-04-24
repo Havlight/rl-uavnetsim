@@ -33,7 +33,7 @@ def received_power_dbw(
 
 def satellite_backhaul_capacity_bps(
     gateway_position: np.ndarray,
-    satellite_position: np.ndarray = np.asarray(config.SAT_POSITION, dtype=float),
+    satellite_position: np.ndarray | None = None,
     tx_power_w: float = config.P_TX_UAV,
     bandwidth_hz: float = config.B_SAT,
     tx_gain_db: float = config.G_TX_DB,
@@ -56,7 +56,7 @@ def satellite_backhaul_capacity_bps(
 
 def satellite_backhaul_sinr_linear(
     gateway_position: np.ndarray,
-    satellite_position: np.ndarray = np.asarray(config.SAT_POSITION, dtype=float),
+    satellite_position: np.ndarray | None = None,
     tx_power_w: float = config.P_TX_UAV,
     bandwidth_hz: float = config.B_SAT,
     tx_gain_db: float = config.G_TX_DB,
@@ -64,6 +64,8 @@ def satellite_backhaul_sinr_linear(
     atmospheric_loss_db: float = config.L_ATM_DB,
     noise_figure_db: float = config.NF_SAT,
 ) -> float:
+    if satellite_position is None:
+        satellite_position = np.asarray(config.SAT_POSITION, dtype=float)
     distance_m = euclidean_distance_3d(
         ensure_3d_position(gateway_position, default_z=config.UAV_HEIGHT),
         ensure_3d_position(satellite_position, default_z=config.SAT_ALTITUDE),
@@ -82,7 +84,7 @@ def satellite_backhaul_sinr_linear(
 
 def satellite_backhaul_snr_db(
     gateway_position: np.ndarray,
-    satellite_position: np.ndarray = np.asarray(config.SAT_POSITION, dtype=float),
+    satellite_position: np.ndarray | None = None,
     **kwargs: float,
 ) -> float:
     return 10.0 * math.log10(

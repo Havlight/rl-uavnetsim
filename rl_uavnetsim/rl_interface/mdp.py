@@ -28,6 +28,21 @@ class RewardReferenceScales:
     relay_queue_ref_bits: float = config.RELAY_QUEUE_REF_BITS
 
 
+@dataclass(frozen=True)
+class TeamRewardConfig:
+    energy_coef: float = config.ETA
+    outage_coef: float = config.MU
+    access_backlog_coef: float = config.BETA_ACCESS
+    relay_queue_coef: float = config.BETA_RELAY
+    connectivity_coef: float = config.LAMBDA_CONN
+    safety_coef: float = config.LAMBDA_SAFE
+    outage_threshold_bps: float = config.R_MIN
+    target_coverage: float = 0.0
+    coverage_gap_coef: float = 0.0
+    target_fairness: float = 0.0
+    fairness_gap_coef: float = 0.0
+
+
 def _safe_norm(value: float, reference: float) -> float:
     return float(value) / max(float(reference), config.EPSILON)
 
@@ -267,12 +282,23 @@ def compute_team_reward(
     users: Sequence[GroundUser],
     *,
     reward_reference_scales: RewardReferenceScales | None = None,
+    reward_config: Any | None = None,
 ) -> float:
     reward_reference_scales = reward_reference_scales or RewardReferenceScales()
+    reward_config = reward_config or TeamRewardConfig()
     throughput_norm = _safe_norm(step_result.env_state.total_delivered_bits_step, reward_reference_scales.throughput_ref_bits)
     total_energy_step_j = float(sum(step_result.accounting.energy_used_j_by_uav.values()))
     energy_norm = _safe_norm(total_energy_step_j, reward_reference_scales.energy_ref_j)
-    outage_ratio = float(sum(user.final_rate_bps < config.R_MIN for user in users)) / max(len(users), 1)
+    outage_threshold_bps = float(getattr(reward_config, "outage_threshold_bps", config.R_MIN))
+    outage_ratio = float(sum(user.final_rate_bps < outage_threshold_bps for user in users)) / max(len(users), 1)
+    coverage_ratio = float(sum(user.associated_uav_id >= 0 for user in users)) / max(len(users), 1)
+    fairness = float(
+        (sum(max(0.0, user.final_rate_bps) for user in users) ** 2)
+        / max(
+            len(users) * sum(max(0.0, user.final_rate_bps) ** 2 for user in users),
+            config.EPSILON,
+        )
+    )
     access_backlog_norm = _safe_norm(
         sum(user.user_access_backlog_bits for user in users),
         reward_reference_scales.access_backlog_ref_bits,
@@ -282,15 +308,19 @@ def compute_team_reward(
         reward_reference_scales.relay_queue_ref_bits,
     )
     num_safety_violations = count_safety_violations(uavs)
+    coverage_gap = max(0.0, float(getattr(reward_config, "target_coverage", 0.0)) - coverage_ratio)
+    fairness_gap = max(0.0, float(getattr(reward_config, "target_fairness", 0.0)) - fairness)
 
     return (
         throughput_norm
-        - config.ETA * energy_norm
-        - config.MU * outage_ratio
-        - config.BETA_ACCESS * access_backlog_norm
-        - config.BETA_RELAY * relay_queue_norm
-        - config.LAMBDA_CONN * float(step_result.env_state.lambda2 <= 0.0)
-        - config.LAMBDA_SAFE * float(num_safety_violations)
+        - float(getattr(reward_config, "energy_coef", config.ETA)) * energy_norm
+        - float(getattr(reward_config, "outage_coef", config.MU)) * outage_ratio
+        - float(getattr(reward_config, "access_backlog_coef", config.BETA_ACCESS)) * access_backlog_norm
+        - float(getattr(reward_config, "relay_queue_coef", config.BETA_RELAY)) * relay_queue_norm
+        - float(getattr(reward_config, "connectivity_coef", config.LAMBDA_CONN)) * float(step_result.env_state.lambda2 <= 0.0)
+        - float(getattr(reward_config, "safety_coef", config.LAMBDA_SAFE)) * float(num_safety_violations)
+        - float(getattr(reward_config, "coverage_gap_coef", 0.0)) * coverage_gap
+        - float(getattr(reward_config, "fairness_gap_coef", 0.0)) * fairness_gap
     )
 
 
@@ -310,11 +340,13 @@ class MultiAgentUavNetEnv:
         *,
         max_steps: int = config.SIM_STEPS,
         alpha_controllers: Mapping[int, LinUCBStub] | None = None,
+        reward_config: Any | None = None,
     ) -> None:
         self.sim_env = sim_env
         self.max_steps = int(max_steps)
         self.agent_ids = [uav.id for uav in self.sim_env.uavs]
         self.reward_reference_scales = build_reward_reference_scales(self.sim_env.uavs, self.sim_env.users)
+        self.reward_config = reward_config or TeamRewardConfig()
         self.alpha_controllers = dict(alpha_controllers or {
             agent_id: LinUCBStub(fixed_alpha=config.PF_ALPHA_DEFAULT) for agent_id in self.agent_ids
         })
@@ -388,7 +420,11 @@ class MultiAgentUavNetEnv:
         actions_by_agent: Mapping[int, Mapping[str, float]],
         **sim_step_kwargs: Any,
     ) -> MultiAgentStep:
-        associate_users_to_uavs(self.sim_env.users, self.sim_env.uavs)
+        associate_users_to_uavs(
+            self.sim_env.users,
+            self.sim_env.uavs,
+            min_rate_bps=self.sim_env.association_min_rate_bps,
+        )
         context_by_uav = {
             uav.id: build_linucb_context(uav, self.sim_env.uavs, self.sim_env.users)
             for uav in self.sim_env.uavs
@@ -405,6 +441,7 @@ class MultiAgentUavNetEnv:
             self.sim_env.uavs,
             self.sim_env.users,
             reward_reference_scales=self.reward_reference_scales,
+            reward_config=self.reward_config,
         )
         for agent_id, alpha_controller in self.alpha_controllers.items():
             alpha_controller.update(context_by_uav.get(agent_id), team_reward)

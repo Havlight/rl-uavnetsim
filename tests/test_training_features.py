@@ -12,8 +12,10 @@ from rl_uavnetsim.main import build_demo_entities
 from rl_uavnetsim.training.features import (
     build_compact_local_observation,
     build_compact_state,
+    build_compact_v2_local_observation,
     compact_observation_dim,
     compact_state_dim,
+    compact_v2_observation_dim,
 )
 from rl_uavnetsim.training.configuration import EnvConfig, EvalConfig, ModelConfig, ObservationConfig, OutputConfig, RunConfig, TrainerConfig, load_run_config
 from rl_uavnetsim.training.mappo_trainer import (
@@ -22,11 +24,16 @@ from rl_uavnetsim.training.mappo_trainer import (
     build_training_env,
     run_torchrl_spike,
 )
+from rl_uavnetsim.training.observation_presets import get_observation_preset
 from rl_uavnetsim.training.pettingzoo_env import PettingZooUavNetEnv, decode_movement_action
 
 
 def test_compact_observation_dim_matches_v1_contract() -> None:
     assert compact_observation_dim(num_uavs=5, max_obs_users=15) == 57
+
+
+def test_compact_v2_observation_dim_adds_backlog_association_and_self_load() -> None:
+    assert compact_v2_observation_dim(num_uavs=5, max_obs_users=15) == 88
 
 
 def test_compact_state_dim_matches_v1_contract() -> None:
@@ -102,6 +109,79 @@ def test_build_compact_local_observation_uses_geometry_first_layout() -> None:
     )
 
     np.testing.assert_allclose(observation, expected)
+
+
+def test_build_compact_v2_local_observation_adds_urgency_and_association_features() -> None:
+    observed_uav = UAV(
+        id=0,
+        position=np.array([100.0, 400.0, config.UAV_HEIGHT]),
+        velocity=np.array([10.0, -5.0]),
+        speed=float(np.linalg.norm([10.0, -5.0])),
+        direction=0.0,
+        is_gateway_capable=True,
+        associated_user_ids=[0],
+        relay_queue_bits_by_user={7: 0.4 * config.RELAY_QUEUE_REF_BITS},
+    )
+    peer_uav = UAV(
+        id=1,
+        position=np.array([1500.0, 1000.0, config.UAV_HEIGHT]),
+        velocity=np.array([-8.0, 6.0]),
+        speed=10.0,
+        direction=0.0,
+    )
+    near_user = GroundUser(
+        id=0,
+        position=np.array([150.0, 450.0, 0.0]),
+        velocity=np.zeros(2),
+        speed=0.0,
+        associated_uav_id=0,
+        user_access_backlog_bits=0.25 * config.ACCESS_BACKLOG_REF_BITS,
+    )
+    far_user = GroundUser(
+        id=1,
+        position=np.array([300.0, 700.0, 0.0]),
+        velocity=np.zeros(2),
+        speed=0.0,
+        associated_uav_id=1,
+        user_access_backlog_bits=0.5 * config.ACCESS_BACKLOG_REF_BITS,
+    )
+
+    observation = build_compact_v2_local_observation(
+        observed_uav,
+        [observed_uav, peer_uav],
+        [near_user, far_user],
+        max_obs_users=2,
+        obs_radius_m=400.0,
+    )
+
+    assert observation.shape == (compact_v2_observation_dim(2, 2),)
+    np.testing.assert_allclose(observation[7], 0.5)
+    user_block = observation[13:]
+    np.testing.assert_allclose(
+        user_block,
+        np.array(
+            [
+                150.0 / config.MAP_LENGTH,
+                450.0 / config.MAP_WIDTH,
+                0.25,
+                1.0,
+                300.0 / config.MAP_LENGTH,
+                700.0 / config.MAP_WIDTH,
+                0.5,
+                0.0,
+            ],
+            dtype=np.float32,
+        ),
+    )
+
+
+def test_observation_preset_registry_owns_observation_and_state_contracts() -> None:
+    compact_v1 = get_observation_preset("compact_v1")
+    compact_v2 = get_observation_preset("compact_v2")
+
+    assert compact_v1.observation_dim(5, 15) == 57
+    assert compact_v2.observation_dim(5, 15) == 88
+    assert compact_v1.state_dim(5, 60) == compact_v2.state_dim(5, 60) == 155
 
 
 def test_build_compact_state_flattens_uav_and_user_geometry() -> None:
@@ -377,3 +457,37 @@ def test_build_training_env_prefers_explicit_scenario_fields_over_demo_mode_pres
     ys = np.asarray([user.position[1] for user in env.sim_env.users], dtype=float)
     assert xs.min() >= 0.02 * config.MAP_LENGTH - 1e-6
     assert ys.min() >= 0.02 * config.MAP_WIDTH - 1e-6
+
+
+def test_build_training_env_applies_scenario_map_size_to_entities_and_normalization() -> None:
+    run_config = RunConfig(
+        seed=41,
+        env=EnvConfig(
+            num_steps=5,
+            num_uavs=3,
+            num_users=8,
+            backhaul_type="satellite",
+            map_length_m=3000.0,
+            map_width_m=2500.0,
+            user_distribution="uniform",
+            spawn_margin=0.02,
+        ),
+        observation=ObservationConfig(preset="compact_v2", max_obs_users=4, obs_radius_m=800.0),
+        trainer=TrainerConfig(total_frames=8, frames_per_batch=4),
+        model=ModelConfig(actor_hidden_dims=(16,), critic_hidden_dims=(16,), activation="tanh"),
+        eval=EvalConfig(num_eval_episodes=1, deterministic_policy=True),
+        output=OutputConfig(root_dir="runs/test", run_name="large_map"),
+    )
+
+    env = build_training_env(run_config, seed=run_config.seed)
+
+    np.testing.assert_allclose(env.sim_env.uavs[0].position[:2], [1500.0, 1250.0])
+    np.testing.assert_allclose(env.sim_env.satellites[0].position[:2], [1500.0, 1250.0])
+    assert env.sim_env.map_length_m == 3000.0
+    assert env.sim_env.map_width_m == 2500.0
+    observations, _ = env.reset(seed=run_config.seed)
+    assert observations["uav_0"].shape == (compact_v2_observation_dim(3, 4),)
+    np.testing.assert_allclose(observations["uav_0"][:2], [0.5, 0.5])
+    for user in env.sim_env.users:
+        assert user.mobility_model.x_bounds_m == (0.0, 3000.0)
+        assert user.mobility_model.y_bounds_m == (0.0, 2500.0)
