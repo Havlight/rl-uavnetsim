@@ -7,6 +7,7 @@ from rl_uavnetsim import config
 from rl_uavnetsim.channel.a2g_channel import a2g_upper_bound_rate_bps
 from rl_uavnetsim.entities.ground_user import GroundUser
 from rl_uavnetsim.entities.uav import UAV
+from rl_uavnetsim.utils.helpers import euclidean_distance_2d
 
 
 @dataclass
@@ -23,6 +24,7 @@ def select_strongest_feasible_uav(
     *,
     current_load_by_uav_id: dict[int, int] | None = None,
     min_rate_bps: float = config.R_MIN,
+    max_access_range_m: float | None = None,
     num_subchannels: int = config.NUM_SUBCHANNELS,
 ) -> tuple[int, dict[int, float], dict[int, float], dict[int, int]]:
     best_uav_id = -1
@@ -43,6 +45,9 @@ def select_strongest_feasible_uav(
         proxy_rate_bps = upper_bound_rate_bps / max(projected_load, 1)
         proxy_rate_bps_by_uav_id[uav.id] = proxy_rate_bps
 
+        if max_access_range_m is not None and euclidean_distance_2d(uav.position, user.position) > float(max_access_range_m):
+            continue
+
         if proxy_rate_bps < float(min_rate_bps):
             continue
 
@@ -58,6 +63,7 @@ def associate_users_to_uavs(
     uavs: Sequence[UAV],
     *,
     min_rate_bps: float = config.R_MIN,
+    max_access_range_m: float | None = None,
     num_subchannels: int = config.NUM_SUBCHANNELS,
 ) -> AssociationResult:
     associated_uav_id_by_user: dict[int, int] = {}
@@ -85,6 +91,7 @@ def associate_users_to_uavs(
             uavs=uavs,
             current_load_by_uav_id=current_load_by_uav_id,
             min_rate_bps=min_rate_bps,
+            max_access_range_m=max_access_range_m,
             num_subchannels=num_subchannels,
         )
         user.associated_uav_id = selected_uav_id

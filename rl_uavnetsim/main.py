@@ -44,6 +44,7 @@ class DemoModeConfig:
     user_distribution: str
     spawn_margin: float
     association_min_rate_bps: float
+    max_access_range_m: float | None
 
 
 def get_demo_mode_config(mode: str) -> DemoModeConfig:
@@ -62,6 +63,7 @@ def get_demo_mode_config(mode: str) -> DemoModeConfig:
             user_distribution="hotspots",
             spawn_margin=0.1,
             association_min_rate_bps=config.R_MIN,
+            max_access_range_m=None,
         )
     return DemoModeConfig(
         mode="default",
@@ -76,7 +78,60 @@ def get_demo_mode_config(mode: str) -> DemoModeConfig:
         user_distribution="uniform",
         spawn_margin=0.1,
         association_min_rate_bps=config.R_MIN,
+        max_access_range_m=None,
     )
+
+
+def _separated_hotspot_centers(
+    geometry: ScenarioGeometry,
+    *,
+    min_x: float,
+    max_x: float,
+    min_y: float,
+    max_y: float,
+) -> list[np.ndarray]:
+    relative_centers = ((0.15, 0.15), (0.85, 0.15), (0.15, 0.85), (0.85, 0.85))
+    return [
+        np.array(
+            [
+                np.clip(relative_x * geometry.map_length_m, min_x, max_x),
+                np.clip(relative_y * geometry.map_width_m, min_y, max_y),
+                0.0,
+            ],
+            dtype=float,
+        )
+        for relative_x, relative_y in relative_centers
+    ]
+
+
+def validate_separated_hotspot_geometry(
+    *,
+    map_length_m: float,
+    map_width_m: float,
+    spawn_margin: float,
+    max_access_range_m: float | None,
+) -> None:
+    if max_access_range_m is None:
+        return
+    geometry = ScenarioGeometry(map_length_m=float(map_length_m), map_width_m=float(map_width_m))
+    spawn_margin = float(np.clip(spawn_margin, 0.0, 0.49))
+    min_x = spawn_margin * geometry.map_length_m
+    max_x = (1.0 - spawn_margin) * geometry.map_length_m
+    min_y = spawn_margin * geometry.map_width_m
+    max_y = (1.0 - spawn_margin) * geometry.map_width_m
+    centers = _separated_hotspot_centers(geometry, min_x=min_x, max_x=max_x, min_y=min_y, max_y=max_y)
+    min_center_distance_m = min(
+        float(np.linalg.norm(source[:2] - target[:2]))
+        for source_index, source in enumerate(centers)
+        for target in centers[source_index + 1 :]
+    )
+    required_distance_m = 1.5 * float(max_access_range_m)
+    if min_center_distance_m < required_distance_m:
+        raise ValueError(
+            "separated_hotspots requires cluster centers to be at least "
+            f"{required_distance_m:.1f} m apart for max_access_range_m={float(max_access_range_m):.1f}; "
+            f"got {min_center_distance_m:.1f} m. Increase map size or reduce max_access_range_m."
+        )
 
 
 def build_demo_entities(
@@ -143,7 +198,15 @@ def build_demo_entities(
         np.array([0.72 * geometry.map_length_m, 0.32 * geometry.map_width_m, 0.0], dtype=float),
         np.array([0.58 * geometry.map_length_m, 0.72 * geometry.map_width_m, 0.0], dtype=float),
     ]
+    separated_hotspot_centers = _separated_hotspot_centers(
+        geometry,
+        min_x=min_x,
+        max_x=max_x,
+        min_y=min_y,
+        max_y=max_y,
+    )
     hotspot_spread_m = 180.0
+    separated_hotspot_spread_m = min(160.0, 0.06 * min(geometry.map_length_m, geometry.map_width_m))
     for user_id in range(int(num_users)):
         if user_distribution == "hotspots":
             center = hotspot_centers[user_id % len(hotspot_centers)]
@@ -151,6 +214,18 @@ def build_demo_entities(
                 [
                     rng.normal(0.0, hotspot_spread_m),
                     rng.normal(0.0, hotspot_spread_m),
+                    0.0,
+                ],
+                dtype=float,
+            )
+            position[0] = np.clip(position[0], min_x, max_x)
+            position[1] = np.clip(position[1], min_y, max_y)
+        elif user_distribution == "separated_hotspots":
+            center = separated_hotspot_centers[user_id % len(separated_hotspot_centers)]
+            position = center + np.array(
+                [
+                    rng.normal(0.0, separated_hotspot_spread_m),
+                    rng.normal(0.0, separated_hotspot_spread_m),
                     0.0,
                 ],
                 dtype=float,
@@ -201,6 +276,7 @@ def run_demo_episode(
     demo_mode: str = "default",
     spawn_margin: float | None = None,
     association_min_rate_bps: float | None = None,
+    max_access_range_m: float | None = None,
     map_length_m: float = config.MAP_LENGTH,
     map_width_m: float = config.MAP_WIDTH,
 ) -> DemoArtifacts:
@@ -234,6 +310,11 @@ def run_demo_episode(
             mode_config.association_min_rate_bps
             if association_min_rate_bps is None
             else float(association_min_rate_bps)
+        ),
+        max_access_range_m=(
+            mode_config.max_access_range_m
+            if max_access_range_m is None
+            else float(max_access_range_m)
         ),
         map_length_m=map_length_m,
         map_width_m=map_width_m,
@@ -332,6 +413,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default=None,
         help="Minimum proxy rate required for user-UAV association feasibility.",
     )
+    parser.add_argument(
+        "--max-access-range-m",
+        type=float,
+        default=None,
+        help="Optional 2D horizontal association range limit in meters.",
+    )
     return parser
 
 
@@ -348,6 +435,7 @@ def main(argv: list[str] | None = None) -> int:
         demo_mode=args.demo_mode,
         spawn_margin=args.spawn_margin,
         association_min_rate_bps=args.association_min_rate_bps,
+        max_access_range_m=args.max_access_range_m,
         map_length_m=args.map_length_m,
         map_width_m=args.map_width_m,
     )

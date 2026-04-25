@@ -38,6 +38,7 @@ class EnvConfig:
     user_distribution: str | None = None
     spawn_margin: float | None = None
     association_min_rate_bps: float | None = None
+    max_access_range_m: float | None = None
 
 
 @dataclass(frozen=True)
@@ -90,6 +91,8 @@ class RewardConfig:
     outage_threshold_bps: float = config.R_MIN
     target_coverage: float = 0.0
     coverage_gap_coef: float = 0.0
+    target_effective_coverage: float = 0.0
+    effective_coverage_gap_coef: float = 0.0
     target_fairness: float = 0.0
     fairness_gap_coef: float = 0.0
 
@@ -176,6 +179,11 @@ def run_config_from_dict(payload: dict[str, Any]) -> RunConfig:
                 if "association_min_rate_bps" in env_payload
                 else EnvConfig.association_min_rate_bps
             ),
+            max_access_range_m=(
+                float(env_payload["max_access_range_m"])
+                if "max_access_range_m" in env_payload
+                else EnvConfig.max_access_range_m
+            ),
         ),
         observation=ObservationConfig(
             preset=str(observation_payload.get("preset", ObservationConfig.preset)),
@@ -218,6 +226,12 @@ def run_config_from_dict(payload: dict[str, Any]) -> RunConfig:
             outage_threshold_bps=float(reward_payload.get("outage_threshold_bps", RewardConfig.outage_threshold_bps)),
             target_coverage=float(reward_payload.get("target_coverage", RewardConfig.target_coverage)),
             coverage_gap_coef=float(reward_payload.get("coverage_gap_coef", RewardConfig.coverage_gap_coef)),
+            target_effective_coverage=float(
+                reward_payload.get("target_effective_coverage", RewardConfig.target_effective_coverage)
+            ),
+            effective_coverage_gap_coef=float(
+                reward_payload.get("effective_coverage_gap_coef", RewardConfig.effective_coverage_gap_coef)
+            ),
             target_fairness=float(reward_payload.get("target_fairness", RewardConfig.target_fairness)),
             fairness_gap_coef=float(reward_payload.get("fairness_gap_coef", RewardConfig.fairness_gap_coef)),
         ),
@@ -236,6 +250,7 @@ _COMPATIBLE_EVAL_ENV_FIELDS = {
     "user_distribution",
     "spawn_margin",
     "association_min_rate_bps",
+    "max_access_range_m",
     "map_length_m",
     "map_width_m",
 }

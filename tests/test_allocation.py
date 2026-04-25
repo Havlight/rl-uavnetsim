@@ -61,6 +61,36 @@ def test_user_association_can_leave_user_unassociated() -> None:
     assert uav.associated_user_ids == []
 
 
+def test_user_association_respects_max_access_range_gate() -> None:
+    uav_near = UAV(
+        id=0,
+        position=np.array([0.0, 0.0, config.UAV_HEIGHT]),
+        velocity=np.zeros(2),
+        speed=0.0,
+        direction=0.0,
+    )
+    uav_far = UAV(
+        id=1,
+        position=np.array([1000.0, 0.0, config.UAV_HEIGHT]),
+        velocity=np.zeros(2),
+        speed=0.0,
+        direction=0.0,
+    )
+    user = GroundUser(
+        id=12,
+        position=np.array([980.0, 0.0, 0.0]),
+        velocity=np.zeros(2),
+        speed=0.0,
+    )
+
+    unrestricted = associate_users_to_uavs([user], [uav_near, uav_far])
+    restricted = associate_users_to_uavs([user], [uav_near, uav_far], max_access_range_m=10.0)
+
+    assert unrestricted.associated_uav_id_by_user[user.id] == uav_far.id
+    assert restricted.associated_uav_id_by_user[user.id] == -1
+    assert restricted.upper_bound_rate_bps_by_user_and_uav[(user.id, uav_far.id)] > 0.0
+
+
 def test_pf_slot_respects_backlog_and_updates_ema() -> None:
     uav = UAV(
         id=0,

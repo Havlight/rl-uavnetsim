@@ -69,12 +69,14 @@ def test_metrics_collector_and_plotters_generate_outputs(tmp_path: Path) -> None
     assert summary.num_steps == 2
     assert len(history) == 2
     assert "sum_throughput_bps" in history[0]
+    assert "effective_coverage_ratio" in history[0]
     assert summary.cumulative_arrived_bits > 0.0
 
     metrics_png_path = MetricsPlotter().plot_step_metrics(
         metrics_collector.step_records,
         tmp_path / "metrics.png",
     )
+    metric_set_paths = MetricsPlotter().plot_metric_set(metrics_collector.step_records, tmp_path / "plots")
     frame_png_path = TrajectoryVisualizer().render_frame(
         visualization_frames,
         frame_index=1,
@@ -87,6 +89,7 @@ def test_metrics_collector_and_plotters_generate_outputs(tmp_path: Path) -> None
     )
 
     assert metrics_png_path.exists() and metrics_png_path.stat().st_size > 0
+    assert metric_set_paths["effective_coverage"].exists()
     assert frame_png_path.exists() and frame_png_path.stat().st_size > 0
     assert gif_path.exists() and gif_path.stat().st_size > 0
 
@@ -170,4 +173,6 @@ def test_metrics_collector_uses_runtime_outage_threshold() -> None:
     strict_record = MetricsCollector(outage_threshold_bps=2_000_000.0).record(step_result, env.uavs, env.users)
 
     assert default_record.outage_ratio == 0.0
+    assert default_record.effective_coverage_ratio == 1.0
     assert strict_record.outage_ratio == 1.0
+    assert strict_record.effective_coverage_ratio == 0.0

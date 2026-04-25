@@ -33,6 +33,7 @@ def _tiny_run_config(tmp_path: Path) -> RunConfig:
             user_distribution="uniform",
             spawn_margin=0.1,
             association_min_rate_bps=0.5e6,
+            max_access_range_m=900.0,
         ),
         observation=ObservationConfig(preset="compact_v2", max_obs_users=2, obs_radius_m=800.0),
         trainer=TrainerConfig(total_frames=4, frames_per_batch=2),
@@ -68,6 +69,7 @@ def test_evaluate_policy_writes_schema_v2_and_cleans_stale_episode_dirs(tmp_path
     assert (output_dir / "episodes" / "episode_000" / "metrics_history.json").exists()
     assert not (output_dir / "static" / "episodes").exists()
     assert (output_dir / "plots" / "throughput.png").exists()
+    assert (output_dir / "plots" / "effective_coverage.png").exists()
 
 
 def test_eval_config_merge_allows_compatible_runtime_overrides() -> None:
@@ -79,9 +81,10 @@ def test_eval_config_merge_allows_compatible_runtime_overrides() -> None:
             "map_length_m": 3000.0,
             "map_width_m": 3000.0,
             "association_min_rate_bps": 14.0e6,
+            "max_access_range_m": 700.0,
         },
         "eval": {"num_eval_episodes": 1, "deterministic_policy": True},
-        "reward": {"outage_coef": 3.0, "target_coverage": 0.9},
+        "reward": {"outage_coef": 3.0, "target_coverage": 0.9, "target_effective_coverage": 0.8},
         "output": {"root_dir": "runs/eval", "run_name": "manual_eval"},
     }
     overrides = run_config_from_dict(override_payload)
@@ -92,9 +95,11 @@ def test_eval_config_merge_allows_compatible_runtime_overrides() -> None:
     assert merged.env.num_steps == 3
     assert merged.env.map_length_m == 3000.0
     assert merged.env.association_min_rate_bps == 14.0e6
+    assert merged.env.max_access_range_m == 700.0
     assert merged.env.num_uavs == base_config.env.num_uavs
     assert merged.observation == base_config.observation
     assert merged.reward.outage_coef == 3.0
+    assert merged.reward.target_effective_coverage == 0.8
 
 
 def test_eval_config_merge_rejects_incompatible_shape_overrides() -> None:

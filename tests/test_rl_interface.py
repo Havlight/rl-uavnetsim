@@ -250,6 +250,60 @@ def test_compute_team_reward_uses_runtime_reward_config() -> None:
     assert reward == -4.0
 
 
+def test_compute_team_reward_uses_effective_coverage_gap_config() -> None:
+    user = GroundUser(
+        id=0,
+        position=np.array([10.0, 0.0, 0.0]),
+        velocity=np.zeros(2),
+        speed=0.0,
+        final_rate_bps=100_000.0,
+        associated_uav_id=0,
+        user_access_backlog_bits=0.0,
+    )
+    uav = UAV(
+        id=0,
+        position=np.array([0.0, 0.0, config.UAV_HEIGHT]),
+        velocity=np.zeros(2),
+        speed=0.0,
+        direction=0.0,
+    )
+    step_result = SimpleNamespace(
+        env_state=EnvState(
+            current_step=1,
+            adjacency_matrix=np.zeros((1, 1), dtype=int),
+            lambda2=1.0,
+            backhaul_capacity_bps=0.0,
+            total_delivered_bits_step=0.0,
+        ),
+        accounting=SimpleNamespace(energy_used_j_by_uav={0: 0.0}),
+    )
+
+    reward = compute_team_reward(
+        step_result,
+        [uav],
+        [user],
+        reward_reference_scales=RewardReferenceScales(
+            throughput_ref_bits=1.0,
+            energy_ref_j=1.0,
+            access_backlog_ref_bits=1.0,
+            relay_queue_ref_bits=1.0,
+        ),
+        reward_config=TeamRewardConfig(
+            energy_coef=0.0,
+            outage_coef=0.0,
+            access_backlog_coef=0.0,
+            relay_queue_coef=0.0,
+            connectivity_coef=0.0,
+            safety_coef=0.0,
+            outage_threshold_bps=500_000.0,
+            target_effective_coverage=1.0,
+            effective_coverage_gap_coef=5.0,
+        ),
+    )
+
+    assert reward == -5.0
+
+
 def test_build_local_observation_uses_normalized_absolute_geometry() -> None:
     gateway = UAV(
         id=0,

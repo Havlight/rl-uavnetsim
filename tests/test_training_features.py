@@ -407,10 +407,61 @@ def test_torchrl_spike_runs_against_pettingzoo_wrapper() -> None:
     assert spike_summary["critic_output_dim"] == 1
 
 
-def test_load_run_config_accepts_explicit_training_scenario_fields() -> None:
-    run_config = load_run_config(
-        Path("configs/marl/mappo_satellite_3uav_medium.yaml")
+def test_load_run_config_accepts_explicit_training_scenario_fields(tmp_path: Path) -> None:
+    config_path = tmp_path / "explicit_training_scenario.yaml"
+    config_path.write_text(
+        """
+seed: 42
+
+env:
+  num_steps: 60
+  num_uavs: 3
+  num_users: 30
+  backhaul_type: satellite
+  user_demand_rate_bps: 2.0e6
+  orbit_radius_m: 600.0
+  user_speed_mean_mps: 3.5
+  user_distribution: hotspots
+  spawn_margin: 0.1
+  association_min_rate_bps: 0.5e6
+  max_access_range_m: 800.0
+
+observation:
+  preset: compact_v1
+  max_obs_users: 15
+  obs_radius_m: 500.0
+
+trainer:
+  frames_per_batch: 300
+  total_frames: 14400
+  ppo_epochs: 4
+  minibatch_size: 128
+  gamma: 0.99
+  gae_lambda: 0.95
+  clip_epsilon: 0.2
+  entropy_coef: 0.0
+  value_coef: 0.5
+  lr: 0.0003
+  device: cuda
+  checkpoint_interval: 2
+  eval_interval: 2
+
+model:
+  actor_hidden_dims: [128, 128, 128]
+  critic_hidden_dims: [256, 256, 256]
+  activation: tanh
+
+eval:
+  num_eval_episodes: 5
+  deterministic_policy: true
+
+output:
+  root_dir: runs
+  run_name: mappo_satellite_3uav_medium
+""",
+        encoding="utf-8",
     )
+    run_config = load_run_config(config_path)
 
     assert run_config.env.user_demand_rate_bps == 2.0e6
     assert run_config.env.orbit_radius_m == 600.0
@@ -418,6 +469,7 @@ def test_load_run_config_accepts_explicit_training_scenario_fields() -> None:
     assert run_config.env.user_distribution == "hotspots"
     assert run_config.env.spawn_margin == 0.1
     assert run_config.env.association_min_rate_bps == config.R_MIN
+    assert run_config.env.max_access_range_m == 800.0
 
 
 def test_build_training_env_prefers_explicit_scenario_fields_over_demo_mode_preset() -> None:
@@ -435,6 +487,7 @@ def test_build_training_env_prefers_explicit_scenario_fields_over_demo_mode_pres
             user_distribution="hotspots",
             spawn_margin=0.02,
             association_min_rate_bps=9.0e6,
+            max_access_range_m=555.0,
         ),
         observation=ObservationConfig(preset="compact_v1", max_obs_users=4, obs_radius_m=500.0),
         trainer=TrainerConfig(total_frames=8, frames_per_batch=4),
@@ -453,6 +506,7 @@ def test_build_training_env_prefers_explicit_scenario_fields_over_demo_mode_pres
     orbit_radius_m = float(np.linalg.norm(env.sim_env.uavs[1].position[:2] - env.sim_env.uavs[0].position[:2]))
     np.testing.assert_allclose(orbit_radius_m, 444.0)
     assert env.sim_env.association_min_rate_bps == 9.0e6
+    assert env.sim_env.max_access_range_m == 555.0
     xs = np.asarray([user.position[0] for user in env.sim_env.users], dtype=float)
     ys = np.asarray([user.position[1] for user in env.sim_env.users], dtype=float)
     assert xs.min() >= 0.02 * config.MAP_LENGTH - 1e-6

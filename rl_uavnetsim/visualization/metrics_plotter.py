@@ -56,7 +56,14 @@ class MetricsPlotter:
             steps,
             [record.coverage_ratio for record in step_records],
             output_dir / "coverage_ratio.png",
-            title="Coverage Ratio",
+            title="Association Coverage Ratio",
+            ylabel="ratio",
+        )
+        outputs["effective_coverage"] = self._plot_single_metric(
+            steps,
+            [record.effective_coverage_ratio for record in step_records],
+            output_dir / "effective_coverage_ratio.png",
+            title="End-to-End Effective Coverage Ratio",
             ylabel="ratio",
         )
         outputs["lambda2"] = self._plot_single_metric(
@@ -100,7 +107,14 @@ class MetricsPlotter:
             "throughput": ("sum_throughput_bps", "Sum Throughput", "Mbps", 1.0e-6, "tab:blue"),
             "outage": ("outage_ratio", "Outage Ratio", "ratio", 1.0, "tab:red"),
             "fairness": ("jain_fairness", "Jain Fairness", "index", 1.0, "tab:green"),
-            "coverage": ("coverage_ratio", "Coverage Ratio", "ratio", 1.0, "tab:purple"),
+            "coverage": ("coverage_ratio", "Association Coverage Ratio", "ratio", 1.0, "tab:purple"),
+            "effective_coverage": (
+                "effective_coverage_ratio",
+                "End-to-End Effective Coverage Ratio",
+                "ratio",
+                1.0,
+                "tab:cyan",
+            ),
             "lambda2": ("lambda2", "Algebraic Connectivity", "lambda2", 1.0, "tab:olive"),
             "demand_satisfaction": (
                 "demand_satisfaction_ratio",
@@ -175,7 +189,12 @@ class MetricsPlotter:
         axes[0, 1].legend()
 
         axes[1, 0].plot(steps, [record.jain_fairness for record in step_records], label="Jain fairness")
-        axes[1, 0].plot(steps, [record.coverage_ratio for record in step_records], label="Coverage ratio")
+        axes[1, 0].plot(steps, [record.coverage_ratio for record in step_records], label="Association coverage")
+        axes[1, 0].plot(
+            steps,
+            [record.effective_coverage_ratio for record in step_records],
+            label="Effective coverage",
+        )
         axes[1, 0].plot(steps, [record.lambda2 for record in step_records], label="Lambda2")
         axes[1, 0].set_title("Fairness / Coverage / Connectivity")
         axes[1, 0].set_xlabel("Step")

@@ -6,24 +6,31 @@ paginate: true
 
 # `rl-uavnetsim` Satellite Demo 報告
 
-教授版研究簡報  
+給教授的簡報版本
 案例：`demo_stress_satellite`
 
 `python -m rl_uavnetsim.main --demo-mode stress --backhaul-type satellite --steps 50 --num-users 100 --output-dir ./demo_stress_satellite`
 
 ---
 
-# 1. 問題與目標
+# 1. 這個系統想回答什麼問題？
 
-- 本系統的目標是建立一個 `step-based` 的 UAV 網路模擬器，用於多無人機協作與 RL 研究。
-- 目前聚焦的問題是：多台 UAV 如何在連續平面中移動，服務移動中的地面使用者，並透過 UAV relay 與 `satellite backhaul` 把資料送出。
-- 因此本系統同時建模：
-  - UAV trajectory control
-  - user-UAV access
-  - UAV-UAV relay
-  - gateway-to-satellite backhaul
-  - backlog / queue dynamics
-- 它不是 packet-level simulator，也不是 SimPy / event-driven 模型；目前採用的是以 step 與 slot 為單位的研究型抽象環境。
+這個專案想做的事情很直接：
+
+- 讓多台 UAV 在連續平面中移動
+- 服務地面上的移動使用者
+- 再把資料經由 UAV relay 匯聚到 gateway UAV
+- 最後透過 satellite backhaul 送出
+
+換句話說，我們關心的不是單純「飛到哪裡比較好」，而是：
+
+- UAV 的移動
+- 使用者的接入
+- UAV 之間的 relay
+- 回傳鏈路的能力限制
+- 以及這些因素如何一起影響 queue、throughput 與服務品質
+
+這個系統目前採用的是 `step-based` 模型，所以它是一個研究型模擬環境，而不是 packet-level simulator。
 
 ---
 
@@ -42,18 +49,34 @@ gateway-capable UAV
 Satellite
 ```
 
-- `Ground Users` 先透過 access link 上傳資料到 UAV。
-- 非 gateway UAV 只負責 relay；資料可逐跳轉送。
-- `gateway-capable UAV` 是可出網節點；在本 demo 中只有一台，位於地圖中心附近。
-- 當前 RL 介面只控制 `trajectory`；association、PF scheduling、routing、relay、backhaul 都由環境規則決定。
+可以把這個架構理解成一個簡化但清楚的資料流：
+
+- 地面使用者先把資料上傳到 UAV
+- 非 gateway UAV 負責中繼與匯聚
+- `gateway-capable UAV` 負責作為出口
+- 最後由 gateway UAV 對 satellite 回傳
+
+在目前這個 demo 中：
+
+- 只有一台 `gateway-capable UAV`
+- RL 只控制 UAV 的移動
+- association、resource allocation、routing、relay 與 backhaul 都由環境規則負責
 
 ---
 
-# 3. 單步模擬流程
+# 3. 每個 step 內發生了什麼？
 
-每個 step 的執行順序如下：
+目前模擬器每一步都依照同一個固定流程往前推進：
 
 `move UAV -> move users -> demand arrival -> association -> access scheduling -> routing -> relay -> satellite backhaul -> metrics`
+
+這樣做的好處是，整個系統的因果關係很清楚：
+
+- 先移動
+- 再產生需求
+- 再決定誰連到誰
+- 接著做 access 與 relay
+- 最後才做 backhaul 與統計
 
 ```python
 association_result = associate_users_to_uavs(self.users, self.uavs)
@@ -78,19 +101,23 @@ backhaul_service_result = execute_backhaul_service(...)
 
 # 4. 地圖與案例設定
 
+這次展示的案例是 `stress satellite demo`，使用的是一個抽象但可控的連續平面場景：
+
 - 地圖大小：`2000 m x 2000 m`
 - UAV 高度：`100 m`
 - 時間步長：`DELTA_T = 1 s`
-- 每個 step 內再切成 `10` 個 slots
-- 回傳節點：位於地圖中心上方高空的 satellite
+- 每個 step 再細分成 `10` 個 slots
+- satellite 位在地圖中心上方高空
 
-Stress demo 設定：
+Stress demo 的設定如下：
 
 - `4` 架 UAV
 - `100` 位 users
 - 每位 user 需求率 `2 Mbps`
-- user 分布採 `hotspots`
-- UAV 初始部署為「中心 gateway + 外圍環狀 UAV」
+- user 採 `hotspots` 分布
+- 初始 UAV 部署為「中心 gateway + 外圍環狀 UAV」
+
+這個設定的目的很明確：不是追求漂亮結果，而是刻意把系統推到高負載，觀察它在壓力下的行為。
 
 ```python
 MAP_LENGTH = 2000.0
@@ -117,19 +144,22 @@ if normalized_mode == "stress":
 
 ---
 
-# 5. 當前移動設計
+# 5. 目前的移動方式
 
-UAV 移動：
+UAV 的移動是用兩個動作量來控制：
 
-- 每台 UAV 的動作為 `rho` 與 `psi`
-- `rho` 決定本步移動距離比例
-- `psi` 決定移動方向
-- 當前 demo 使用 `MAPPOStub`，所以 UAV 動作是隨機產生，不是訓練後策略
+- `rho`：決定這一步要移動多遠
+- `psi`：決定移動方向
 
-Ground user 移動：
+所以從建模角度來看，UAV 並不是在離散格點上跳躍，而是在連續平面中移動。
 
-- 採 `random walk`
-- stress 模式下平均速度為 `3.5 m/s`
+不過要特別強調的是：
+
+- 目前 demo 用的是 `MAPPOStub`
+- 也就是說，這裡展示的是「系統能不能跑、行為是否合理」
+- 不是「訓練後策略有多強」
+
+Ground user 則採 `random walk`，在 stress 模式下平均速度為 `3.5 m/s`。
 
 ```python
 actions_by_agent = policy.act(observations_by_agent, deterministic=deterministic_policy)
@@ -152,15 +182,23 @@ mobility_model=RandomWalkMobility(speed_mean_mps=user_speed_mean_mps)
 
 ---
 
-# 6. 當前接入與資源分配方式
+# 6. 目前的接入與資源分配方式
 
-目前資源分配不是 RL 控制，而是規則式：
+目前的資源分配不是 RL 決定，而是明確、可解釋的規則式邏輯。
 
-- `association`：依 backlog 大小排序，優先處理 queue 壓力大的 user
-- `association`：以 `proxy rate = upper bound rate / projected load` 選最適合的 UAV
-- `access`：使用 PF scheduling
-- `access`：採 `full frequency reuse`
-- `access`：同一 slot、同一 subchannel 的跨 UAV 干擾會被顯式納入
+在 association 階段：
+
+- 先優先處理 backlog 較大的 user
+- 再根據 `proxy rate = upper bound rate / projected load`
+- 把 user 分配給相對更合適的 UAV
+
+在 access 階段：
+
+- 採用 PF scheduling
+- 使用 `full frequency reuse`
+- 若多台 UAV 在同一個 slot、同一個 subchannel 同時傳輸，會把跨 UAV interference 算進去
+
+這表示目前系統不是只做理想化的 strongest-link 選擇，而是已經開始考慮負載與干擾。
 
 ```python
 ordered_users = sorted(
@@ -189,17 +227,18 @@ interfering_uavs = [
 
 # 7. Relay 與 Satellite Backhaul
 
-Routing / relay：
+在 relay 這一層，目前系統的想法是：
 
-- route 會選擇到 gateway 的最佳路徑
-- 判準是 `effective path capacity`
+- 每台 UAV 先找一條到 gateway 的可行路徑
+- 以 `effective path capacity` 作為主要選擇標準
 - relay 採 `one-hop-per-step`
-- queue 使用 staging buffer，避免同一步內連續多跳，維持 accounting 正確
 
-Satellite backhaul：
+這裡 `one-hop-per-step` 很重要，因為它可以避免同一筆資料在同一步裡被連續轉送多次，讓 queue accounting 維持一致。
 
-- 由 active gateway UAV 對 satellite 回傳
-- 當前 demo 是 `single-gateway satellite` 情境
+在 backhaul 這一層：
+
+- active gateway UAV 再把資料送到 satellite
+- 本 demo 是單一 gateway 的 satellite 情境
 
 ```python
 effective_path_capacity_bps = min(
@@ -219,21 +258,23 @@ staging_buffer[user_id] = staging_buffer.get(user_id, 0.0) + forwarded_bits
 
 ---
 
-# 8. Trajectory Example
+# 8. 軌跡圖範例
 
 ![w:950](../../demo_stress_satellite/trajectory_final.png)
+
+這張圖很適合直接用來理解目前案例的系統行為：
 
 - 中央紅色 UAV：`active gateway`
 - 外圍 UAV：relay / service UAV
 - 藍線：`user-to-UAV access links`
 - 綠線：`UAV-to-UAV adjacency / relay connectivity`
-- user 顏色越紅：代表該 user backlog 越高
+- user 顏色越紅：表示 backlog 越高
 
-這張圖反映的是單 gateway satellite 拓樸下，外圍 UAV 收集資料並往中心 gateway 匯聚的行為。
+從這張圖可以直觀看到，目前的資料流大致是由外圍 UAV 收集，再往中心 gateway 匯聚，最後由 gateway 對 satellite 回傳。
 
 ---
 
-# 9. Metrics I: Throughput 與 Queue Growth
+# 9. 指標一：Throughput 與 Queue Growth
 
 <table>
 <tr>
@@ -242,18 +283,28 @@ staging_buffer[user_id] = staging_buffer.get(user_id, 0.0) + forwarded_bits
 </tr>
 </table>
 
-- 平均 throughput 約為 `76.0 Mbps`
-- 本案例新到達流量約為 `200 Mbps`（`100 users x 2 Mbps`）
-- 因此 access backlog 與 relay queue 都持續上升
-- 最終：
-  - user access backlog = `4.69 Gbits`
-  - UAV relay queue = `1.50 Gbits`
+這組圖最重要的訊息是：
 
-重點：這代表系統在 stress case 下`容量不足`，所以 queue 持續累積。這是模型正常反映「容量受限」的結果，不是 simulator 壞掉。
+- 平均 throughput 約為 `76.0 Mbps`
+- 但新到達流量大約是 `200 Mbps`
+
+所以結果很自然：
+
+- user backlog 持續累積
+- relay queue 也持續累積
+
+最終數值為：
+
+- user access backlog = `4.69 Gbits`
+- UAV relay queue = `1.50 Gbits`
+
+我會把這個結果解讀成：
+
+這個 stress case 已經超過了目前系統容量，因此 simulator 正常地呈現出「過載下 queue 成長」的現象，而不是程式異常。
 
 ---
 
-# 10. Metrics II: Service Quality
+# 10. 指標二：Service Quality
 
 <table>
 <tr>
@@ -272,18 +323,22 @@ staging_buffer[user_id] = staging_buffer.get(user_id, 0.0) + forwarded_bits
 | Lambda2 | `1.0` |
 | Cumulative delivered | `3.80 Gbits / 10.0 Gbits arrived` |
 
-- `coverage = 1.0` 只代表所有 users 都有關聯到某台 UAV，不代表都得到足夠品質的服務。
-- `outage ratio = 0.365` 表示仍有相當比例的 users 未達最低速率門檻。
-- `lambda2 = 1.0` 表示本案例的 UAV relay graph 保持連通。
-- 另外，本 episode 的總能耗約 `49.4 kJ`，能量效率約 `76.9 kbits/J`。
+這些指標可以這樣理解：
+
+- `coverage = 1.0`：所有 users 都有被某台 UAV 關聯到
+- 但這不代表每位 user 都拿到足夠好的服務品質
+- `outage ratio = 0.365`：仍有相當比例的 users 沒有達到最低速率門檻
+- `lambda2 = 1.0`：這個案例中的 UAV relay graph 一直保持連通
+
+補充來看，這個 episode 的總能耗約 `49.4 kJ`，能量效率約 `76.9 kbits/J`。
 
 ---
 
-# 11. 當前能力
+# 11. 目前這個 prototype 已經能做什麼？
 
-目前這個 prototype 已能：
+以目前版本來說，這個系統已經可以：
 
-- 進行 `step-based satellite UAV network simulation`
+- 執行 `step-based satellite UAV network simulation`
 - 同時觀察：
   - UAV 移動
   - user association
@@ -291,27 +346,27 @@ staging_buffer[user_id] = staging_buffer.get(user_id, 0.0) + forwarded_bits
   - multi-hop relay
   - satellite backhaul
   - backlog / queue dynamics
-- 產出：
+- 自動輸出：
   - trajectory 圖
-  - 指標時間序列圖
+  - metrics 圖表
   - episode summary
 
-因此，它已經足以作為後續 UAV network 與 RL 研究的基礎實驗環境。
+所以它已經足夠作為後續 RL 與 UAV networking 研究的基礎實驗平台。
 
 ---
 
 # 12. 目前限制與下一步
 
-目前限制：
+目前的限制很清楚：
 
-- 目前 demo 使用的是 `MAPPOStub` 隨機移動，尚不是已訓練策略
-- 地圖仍是抽象矩形場景，尚未包含更高擬真度的語義地圖
-- 目前是 `step-based` queue simulator，不是 packet-level simulator
+- 目前 demo 使用的是 `MAPPOStub` 隨機移動，不是訓練完成的策略
+- 地圖目前仍是抽象矩形場景，語義還不多
+- 模型是 `step-based` queue simulator，不是 packet-level simulator
 
-下一步：
+因此下一步也很直接：
 
-1. 用已訓練的 RL policy 取代當前 stub policy
-2. 增加更真實的場景與地圖語義
-3. 擴展為可學習的 resource allocation / scheduling 方法
+1. 用真正訓練好的 RL policy 取代目前 stub policy
+2. 增加更真實的場景設定與地圖語義
+3. 進一步把 resource allocation / scheduling 做成可學習模組
 
-本報告中的程式碼摘錄僅作為「當前實作邏輯證據」，用來說明系統如何運作，而非形式化驗證證明。
+本簡報中的程式碼片段，主要用來作為「目前系統邏輯的證據」，幫助說明設計與行為，並不宣稱這是形式化驗證結果。

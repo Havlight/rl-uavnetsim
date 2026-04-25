@@ -12,3 +12,6 @@ runs/
 *.gif
 *.png
 *.json
+.codex
+.codex/
+*:Zone.Identifier

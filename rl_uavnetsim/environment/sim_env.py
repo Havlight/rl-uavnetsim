@@ -70,6 +70,7 @@ class SimEnv:
         gateway_capable_uav_ids: Sequence[int] | None = None,
         backhaul_type: str = config.BACKHAUL_TYPE,
         association_min_rate_bps: float = config.R_MIN,
+        max_access_range_m: float | None = None,
         map_length_m: float = config.MAP_LENGTH,
         map_width_m: float = config.MAP_WIDTH,
         rng: np.random.Generator | None = None,
@@ -81,6 +82,9 @@ class SimEnv:
         self.gateway_capable_uav_ids = tuple(resolved_gateway_capable_uav_ids)
         self.backhaul_type = str(backhaul_type)
         self.association_min_rate_bps = float(association_min_rate_bps)
+        self.max_access_range_m = None if max_access_range_m is None else float(max_access_range_m)
+        if self.max_access_range_m is not None and self.max_access_range_m < 0.0:
+            raise ValueError("max_access_range_m must be non-negative when provided.")
         self.map_length_m = float(map_length_m)
         self.map_width_m = float(map_width_m)
         if self.map_length_m <= 0.0 or self.map_width_m <= 0.0:
@@ -158,6 +162,7 @@ class SimEnv:
             self.users,
             self.uavs,
             min_rate_bps=self.association_min_rate_bps,
+            max_access_range_m=self.max_access_range_m,
         )
         access_step_result = run_access_pf_step(
             uavs=self.uavs,

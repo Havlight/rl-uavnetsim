@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+from pathlib import Path
 
 from rl_uavnetsim.training.configuration import load_run_config, load_run_config_payload, merge_eval_config
 from rl_uavnetsim.training.mappo_trainer import evaluate_policy, load_policy_from_checkpoint
@@ -20,7 +21,8 @@ def main() -> None:
         eval_overrides,
         override_payload=override_payload,
     )
-    artifacts = evaluate_policy(policy, run_config, output_dir=run_config.output.root_dir)
+    output_dir = Path(run_config.output.root_dir) / run_config.output.run_name / "standalone_eval"
+    artifacts = evaluate_policy(policy, run_config, output_dir=output_dir)
     print(f"Evaluation output directory: {artifacts.output_dir}")
     print(f"Evaluation summary: {artifacts.summary_json_path}")
 

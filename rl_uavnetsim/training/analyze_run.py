@@ -31,6 +31,12 @@ def _print_schema_v2(summary: dict[str, Any], label: str) -> None:
     print(f"  trained - static: {_format_value(comparison.get('trained_minus_static_reward'))}")
     print(f"  static not beaten: {_format_value(comparison.get('static_baseline_not_beaten'))}")
     movement = trained.get("movement") or {}
+    metrics = trained.get("metrics") or {}
+    print(f"  trained association coverage: {_format_value((metrics.get('mean_coverage_ratio') or {}).get('mean'))}")
+    print(
+        "  trained effective coverage: "
+        f"{_format_value((metrics.get('mean_effective_coverage_ratio') or {}).get('mean'))}"
+    )
     print(f"  trained path length mean: {_format_value((movement.get('mean_path_length_m') or {}).get('mean'))} m")
     print(f"  trained net displacement mean: {_format_value((movement.get('mean_net_displacement_m') or {}).get('mean'))} m")
     print(f"  trained rho mean: {_format_value((movement.get('rho') or {}).get('mean'))}")
@@ -41,6 +47,7 @@ def _print_legacy_summary(summary: dict[str, Any], label: str) -> None:
     print(f"  mean reward: {_format_value(summary.get('mean_team_reward'))}")
     print(f"  throughput: {_format_value(summary.get('mean_sum_throughput_bps'))} bps")
     print(f"  coverage: {_format_value(summary.get('mean_coverage_ratio'))}")
+    print(f"  effective coverage: {_format_value(summary.get('mean_effective_coverage_ratio'))}")
     print(f"  outage: {_format_value(summary.get('mean_outage_ratio'))}")
 
 

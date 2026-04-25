@@ -13,7 +13,7 @@ import numpy as np
 
 from rl_uavnetsim import config
 from rl_uavnetsim.environment import SimEnv
-from rl_uavnetsim.main import build_demo_entities, get_demo_mode_config
+from rl_uavnetsim.main import build_demo_entities, get_demo_mode_config, validate_separated_hotspot_geometry
 from rl_uavnetsim.metrics import MetricsCollector
 from rl_uavnetsim.scenario import ScenarioGeometry
 from rl_uavnetsim.training.configuration import RunConfig, run_config_from_dict, run_config_to_dict, save_run_config
@@ -113,6 +113,18 @@ def build_training_env(run_config: RunConfig, *, seed: int) -> PettingZooUavNetE
         if run_config.env.association_min_rate_bps is not None
         else float(demo_mode_config.association_min_rate_bps)
     )
+    max_access_range_m = (
+        float(run_config.env.max_access_range_m)
+        if run_config.env.max_access_range_m is not None
+        else None
+    )
+    if user_distribution == "separated_hotspots":
+        validate_separated_hotspot_geometry(
+            map_length_m=geometry.map_length_m,
+            map_width_m=geometry.map_width_m,
+            spawn_margin=spawn_margin,
+            max_access_range_m=max_access_range_m,
+        )
     uavs, users, satellites, ground_base_stations = build_demo_entities(
         num_uavs=run_config.env.num_uavs,
         num_users=run_config.env.num_users,
@@ -134,6 +146,7 @@ def build_training_env(run_config: RunConfig, *, seed: int) -> PettingZooUavNetE
         gateway_capable_uav_ids=[0],
         backhaul_type=run_config.env.backhaul_type,
         association_min_rate_bps=association_min_rate_bps,
+        max_access_range_m=max_access_range_m,
         map_length_m=geometry.map_length_m,
         map_width_m=geometry.map_width_m,
         rng=np.random.default_rng(seed),
@@ -691,6 +704,7 @@ def _aggregate_policy_summaries(episode_summaries: list[dict[str, Any]]) -> dict
     metric_keys = [
         "mean_sum_throughput_bps",
         "mean_coverage_ratio",
+        "mean_effective_coverage_ratio",
         "mean_outage_ratio",
         "mean_jain_fairness",
         "total_energy_j",

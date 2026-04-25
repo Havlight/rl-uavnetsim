@@ -1,0 +1,66 @@
+seed: 61
+
+env:
+  num_steps: 200
+  num_uavs: 3
+  num_users: 60
+  backhaul_type: satellite
+  map_length_m: 3000.0
+  map_width_m: 3000.0
+  user_demand_rate_bps: 0.5e6
+  orbit_radius_m: 700.0
+  user_speed_mean_mps: 1.8
+  user_distribution: separated_hotspots
+  spawn_margin: 0.03
+  association_min_rate_bps: 0.5e6
+  max_access_range_m: 800.0
+
+observation:
+  preset: compact_v2
+  max_obs_users: 20
+  obs_radius_m: 2200.0
+
+trainer:
+  frames_per_batch: 500
+  total_frames: 200000
+  ppo_epochs: 6
+  minibatch_size: 128
+  gamma: 0.99
+  gae_lambda: 0.95
+  clip_epsilon: 0.2
+  entropy_coef: 0.01
+  value_coef: 0.5
+  lr: 0.0003
+  device: cuda
+  checkpoint_interval: 2
+  eval_interval: 2
+
+model:
+  actor_hidden_dims: [128, 128, 128]
+  critic_hidden_dims: [256, 256, 256]
+  activation: tanh
+
+eval:
+  num_eval_episodes: 5
+  deterministic_policy: true
+  run_static_baseline: true
+  write_static_artifacts: true
+
+reward:
+  energy_coef: 0.08
+  outage_coef: 2.5
+  access_backlog_coef: 0.6
+  relay_queue_coef: 0.25
+  connectivity_coef: 5.0
+  safety_coef: 2.0
+  outage_threshold_bps: 0.5e6
+  target_coverage: 0.0
+  coverage_gap_coef: 0.0
+  target_effective_coverage: 0.70
+  effective_coverage_gap_coef: 6.0
+  target_fairness: 0.75
+  fairness_gap_coef: 2.5
+
+output:
+  root_dir: runs
+  run_name: mappo_satellite_3uav_sar_lowrate_coverage

@@ -39,6 +39,8 @@ class TeamRewardConfig:
     outage_threshold_bps: float = config.R_MIN
     target_coverage: float = 0.0
     coverage_gap_coef: float = 0.0
+    target_effective_coverage: float = 0.0
+    effective_coverage_gap_coef: float = 0.0
     target_fairness: float = 0.0
     fairness_gap_coef: float = 0.0
 
@@ -292,6 +294,9 @@ def compute_team_reward(
     outage_threshold_bps = float(getattr(reward_config, "outage_threshold_bps", config.R_MIN))
     outage_ratio = float(sum(user.final_rate_bps < outage_threshold_bps for user in users)) / max(len(users), 1)
     coverage_ratio = float(sum(user.associated_uav_id >= 0 for user in users)) / max(len(users), 1)
+    effective_coverage_ratio = float(
+        sum(user.associated_uav_id >= 0 and user.final_rate_bps >= outage_threshold_bps for user in users)
+    ) / max(len(users), 1)
     fairness = float(
         (sum(max(0.0, user.final_rate_bps) for user in users) ** 2)
         / max(
@@ -309,6 +314,10 @@ def compute_team_reward(
     )
     num_safety_violations = count_safety_violations(uavs)
     coverage_gap = max(0.0, float(getattr(reward_config, "target_coverage", 0.0)) - coverage_ratio)
+    effective_coverage_gap = max(
+        0.0,
+        float(getattr(reward_config, "target_effective_coverage", 0.0)) - effective_coverage_ratio,
+    )
     fairness_gap = max(0.0, float(getattr(reward_config, "target_fairness", 0.0)) - fairness)
 
     return (
@@ -320,6 +329,7 @@ def compute_team_reward(
         - float(getattr(reward_config, "connectivity_coef", config.LAMBDA_CONN)) * float(step_result.env_state.lambda2 <= 0.0)
         - float(getattr(reward_config, "safety_coef", config.LAMBDA_SAFE)) * float(num_safety_violations)
         - float(getattr(reward_config, "coverage_gap_coef", 0.0)) * coverage_gap
+        - float(getattr(reward_config, "effective_coverage_gap_coef", 0.0)) * effective_coverage_gap
         - float(getattr(reward_config, "fairness_gap_coef", 0.0)) * fairness_gap
     )
 
@@ -358,6 +368,7 @@ class MultiAgentUavNetEnv:
             self.sim_env.users,
             self.sim_env.uavs,
             min_rate_bps=self.sim_env.association_min_rate_bps,
+            max_access_range_m=self.sim_env.max_access_range_m,
         )
         relay_capacity_matrix_bps = build_a2a_capacity_matrix_bps(self.sim_env.uavs)
         adjacency_matrix = build_adjacency_matrix(relay_capacity_matrix_bps)
@@ -424,6 +435,7 @@ class MultiAgentUavNetEnv:
             self.sim_env.users,
             self.sim_env.uavs,
             min_rate_bps=self.sim_env.association_min_rate_bps,
+            max_access_range_m=self.sim_env.max_access_range_m,
         )
         context_by_uav = {
             uav.id: build_linucb_context(uav, self.sim_env.uavs, self.sim_env.users)

@@ -2,28 +2,24 @@
 marp: true
 theme: default
 paginate: true
----
-
-# `rl-uavnetsim` Satellite Demo Report
-
-Professor-facing research briefing  
-Case study: `demo_stress_satellite`
-
-`python -m rl_uavnetsim.main --demo-mode stress --backhaul-type satellite --steps 50 --num-users 100 --output-dir ./demo_stress_satellite`
 
 ---
 
-# 1. Problem and Goal
+# 1. What problem is this system trying to address?
 
-- This system aims to provide a `step-based` UAV network simulator for multi-UAV coordination and RL research.
-- The current target problem is: how multiple UAVs move in continuous space, serve mobile ground users, and forward data through UAV relay and `satellite backhaul`.
-- The current simulator explicitly models:
-  - UAV trajectory control
-  - user-UAV access
-  - UAV-UAV relay
-  - gateway-to-satellite backhaul
-  - backlog / queue dynamics
-- It is not a packet-level simulator and not a SimPy / event-driven platform; it is a step-and-slot-based research abstraction.
+- how multiple UAVs move in continuous space
+- how they serve mobile ground users
+- how traffic is relayed among UAVs
+- and how the aggregated traffic is finally sent out through a satellite backhaul
+
+So the focus is not only “where should the UAV fly,” but rather the joint behavior of:
+
+- UAV motion
+- user access
+- UAV relay
+- backhaul capacity
+
+The current system is a `step-based` research simulator, not a packet-level simulator.
 
 ---
 
@@ -41,20 +37,36 @@ gateway-capable UAV
     v
 Satellite
 ```
+---
 
-- Ground users upload data to UAVs through access links.
-- Non-gateway UAVs only relay traffic; forwarding can be multi-hop.
-- The `gateway-capable UAV` is the egress node. In the current demo there is only one such UAV, located near the map center.
-- The current RL interface only controls `trajectory`; association, PF scheduling, routing, relay, and backhaul are rule-based environment logic.
+This can be understood as a simplified but explicit traffic flow:
+
+- ground users first upload traffic to UAVs
+- non-gateway UAVs relay the traffic
+- the `gateway-capable UAV` forwards traffic to the satellite
+
+In the current demo:
+
+- there is only one `gateway-capable UAV`
+- RL only controls `trajectory`
+- association, PF scheduling, routing, relay, and backhaul are all handled by environment logic
 
 ---
 
-# 3. Simulation Pipeline
+# 3. What happens inside one simulation step?
 
-Each step follows the pipeline below:
+Each step follows the same pipeline:
 
 `move UAV -> move users -> demand arrival -> association -> access scheduling -> routing -> relay -> satellite backhaul -> metrics`
 
+This ordering matters because it keeps the cause-and-effect relationship clear:
+
+- positions are updated first
+- new demand is then generated
+- access decisions are made on the updated state
+- relay and backhaul are executed afterward
+- and metrics are recorded at the end
+ ---
 ```python
 association_result = associate_users_to_uavs(self.users, self.uavs)
 access_step_result = run_access_pf_step(
@@ -72,25 +84,25 @@ relay_service_result = execute_relay_service(...)
 backhaul_service_result = execute_backhaul_service(...)
 ```
 
-Evidence: key logic excerpt from `sim_env.py`
+from `sim_env.py`
 
 ---
 
 # 4. Map and Scenario Setting
 
-- Map size: `2000 m x 2000 m`
+- map size: `2000 m x 2000 m`
 - UAV altitude: `100 m`
-- Time step: `DELTA_T = 1 s`
-- Each step is divided into `10` slots
-- Backhaul node: a satellite positioned high above the map center
+- time step: `DELTA_T = 1 s`
+- each step is divided into `10` slots
+- the satellite is positioned high above the map center
 
-Stress demo setting:
+The stress demo uses the following setup:
 
 - `4` UAVs
 - `100` users
 - `2 Mbps` demand per user
-- hotspot-based user distribution
-- initial deployment = center gateway + outer ring UAVs
+
+---
 
 ```python
 MAP_LENGTH = 2000.0
@@ -113,33 +125,28 @@ if normalized_mode == "stress":
     )
 ```
 
-Evidence: key settings from `config.py` and `main.py`
+from `config.py` and `main.py`
 
 ---
 
 # 5. Current Mobility Design
 
-UAV mobility:
+UAV motion is controlled by two action variables:
 
-- Each UAV action is defined by `rho` and `psi`
-- `rho` controls the movement distance ratio within the step
-- `psi` controls the movement direction
-- The current demo uses `MAPPOStub`, so UAV motion is random rather than learned
+- `rho`: how far the UAV moves within the step
+- `psi`: the movement direction
 
-Ground user mobility:
+- the UAV behavior shown here is random
 
-- random walk
-- mean speed is `3.5 m/s` in stress mode
+---
+
+Ground users follow a `random walk` model, with mean speed `3.5 m/s` in the stress case.
 
 ```python
 actions_by_agent = policy.act(observations_by_agent, deterministic=deterministic_policy)
 ```
 
 ```python
-if deterministic:
-    rho_norm = 0.0
-    psi_rad = 0.0
-else:
     rho_norm = float(self.rng.uniform(0.0, 1.0))
     psi_rad = float(self.rng.uniform(-math.pi, math.pi))
 ```
@@ -148,19 +155,19 @@ else:
 mobility_model=RandomWalkMobility(speed_mean_mps=user_speed_mean_mps)
 ```
 
-Evidence: key logic excerpt from `main.py` and `mappo_stub.py`
+from `main.py` and `mappo_stub.py`
 
 ---
 
-# 6. Access and Resource Allocation
+# 6. Current Access and Resource Allocation
 
-Current resource allocation is rule-based rather than RL-controlled:
+At the moment, resource allocation is not RL-driven. It is rule-based.
 
-- `association`: users are processed in backlog-descending order
-- `association`: the selected UAV maximizes `proxy rate = upper bound rate / projected load`
-- `access`: PF scheduling is applied
-- `access`: the system uses `full frequency reuse`
-- `access`: cross-UAV co-channel interference is explicitly included for the same slot and subchannel
+During association:
+
+- users with larger backlog are handled first
+- each user is assigned based on
+  `proxy rate = upper bound rate / projected load`
 
 ```python
 ordered_users = sorted(
@@ -172,35 +179,20 @@ if proxy_rate_bps < float(min_rate_bps):
     continue
 ```
 
-```python
-tentative_assignments_by_uav_id = {uav.id: {} for uav in uavs}
-ordered_uavs = _processing_order_for_slot(uavs, slot_index)
-...
-interfering_uavs = [
-    uavs_by_id[other_uav_id]
-    for other_uav_id, assignment_by_subchannel in tentative_assignments_by_uav_id.items()
-    if other_uav_id != uav.id and subchannel_index in assignment_by_subchannel
-]
-```
-
-Evidence: key logic excerpt from `user_association.py` and `resource_manager.py`
-
 ---
 
 # 7. Relay and Satellite Backhaul
 
-Routing / relay:
+At the relay layer, the current system works as follows:
 
-- the route is selected toward the best gateway path
-- the decision criterion is `effective path capacity`
-- relay service is `one-hop-per-step`
-- queue updates use a staging buffer so that the same bits cannot be forwarded multiple hops within one step
+- each UAV looks for a feasible path toward the gateway
+- route selection is based on `effective path capacity`
+- relay service is restricted to `one-hop-per-step`
 
-Satellite backhaul:
-
-- the active gateway UAV sends traffic to the satellite
-- the current demo is a `single-gateway satellite` case
-
+At the backhaul layer:
+- the active gateway UAV forwards traffic to the satellite
+- the current demo is a single-gateway satellite case
+---
 ```python
 effective_path_capacity_bps = min(
     path_bottleneck_capacity_bps,
@@ -219,17 +211,17 @@ Evidence: key logic excerpt from `routing.py` and `relay.py`
 
 ---
 
-# 8. Trajectory Example
+![w:950](../../demo_stress_satellite/trajectory.gif)
 
-![w:950](../../demo_stress_satellite/trajectory_final.png)
+---
+
+This figure is useful because it gives an intuitive picture of the current system behavior:
 
 - center red UAV: `active gateway`
 - outer UAVs: relay / service UAVs
 - blue lines: `user-to-UAV access links`
 - green lines: `UAV-to-UAV adjacency / relay connectivity`
 - redder users indicate larger backlog
-
-This figure shows the expected single-gateway satellite topology: outer UAVs collect traffic and progressively funnel it toward the center gateway.
 
 ---
 
@@ -242,76 +234,7 @@ This figure shows the expected single-gateway satellite topology: outer UAVs col
 </tr>
 </table>
 
-- Mean throughput is about `76.0 Mbps`
-- The arrival traffic in this case is about `200 Mbps` (`100 users x 2 Mbps`)
-- Therefore, both access backlog and relay queue keep growing over time
-- Final values:
-  - user access backlog = `4.69 Gbits`
-  - UAV relay queue = `1.50 Gbits`
+The key message from this pair of figures is straightforward:
 
-Key interpretation: this indicates that the system is overloaded in the stress case. The queue growth is the expected behavior of a capacity-limited network model, not a simulator failure.
-
----
-
-# 10. Metrics II: Service Quality
-
-<table>
-<tr>
-<td><img src="../../demo_stress_satellite/plots/outage_ratio.png" width="100%"></td>
-<td><img src="../../demo_stress_satellite/plots/jain_fairness.png" width="100%"></td>
-<td><img src="../../demo_stress_satellite/plots/demand_satisfaction_ratio.png" width="100%"></td>
-</tr>
-</table>
-
-| Metric | Value |
-|---|---:|
-| Coverage ratio | `1.00` |
-| Outage ratio | `0.365` |
-| Jain fairness | `0.709` |
-| Demand satisfaction ratio | `0.380` |
-| Lambda2 | `1.0` |
-| Cumulative delivered | `3.80 Gbits / 10.0 Gbits arrived` |
-
-- `coverage = 1.0` only means every user is associated with some UAV; it does not mean every user receives high-quality service.
-- `outage ratio = 0.365` shows that a substantial fraction of users still fall below the minimum rate threshold.
-- `lambda2 = 1.0` indicates that the UAV relay graph stays connected in this case.
-- Additional episode summary: total energy is about `49.4 kJ`, and energy efficiency is about `76.9 kbits/J`.
-
----
-
-# 11. Current Capability
-
-The current prototype can already:
-
-- run `step-based satellite UAV network simulation`
-- jointly expose:
-  - UAV motion
-  - user association
-  - PF scheduling
-  - multi-hop relay
-  - satellite backhaul
-  - backlog / queue dynamics
-- generate:
-  - trajectory visualization
-  - metric time-series plots
-  - episode summary outputs
-
-Therefore, it is already suitable as a baseline experimental environment for subsequent UAV-network and RL studies.
-
----
-
-# 12. Current Limitation and Next Step
-
-Current limitations:
-
-- the current demo uses `MAPPOStub` random motion instead of a trained policy
-- the map is still an abstract rectangular scenario
-- the simulator is `step-based` and queue-based, not packet-level
-
-Next steps:
-
-1. replace the current stub policy with a trained RL policy
-2. enrich the scenario with more realistic map semantics
-3. extend the framework toward learning-based resource allocation / scheduling
-
-The code excerpts in this report are included only as implementation evidence showing how the current system works; they are not presented as formal verification claims.
+- mean throughput is about `76.0 Mbps`
+- but new arrival traffic is about `200 Mbps`

@@ -13,6 +13,7 @@ class StepMetricsRecord:
     current_step: int
     sum_throughput_bps: float
     coverage_ratio: float
+    effective_coverage_ratio: float
     outage_ratio: float
     jain_fairness: float
     total_energy_j: float
@@ -30,6 +31,7 @@ class EpisodeMetricsSummary:
     num_steps: int
     mean_sum_throughput_bps: float
     mean_coverage_ratio: float
+    mean_effective_coverage_ratio: float
     mean_outage_ratio: float
     mean_jain_fairness: float
     total_energy_j: float
@@ -73,12 +75,17 @@ class MetricsCollector:
         total_user_access_backlog_bits = float(sum(user.user_access_backlog_bits for user in users))
         total_uav_relay_queue_bits = float(sum(uav.relay_queue_total_bits for uav in uavs))
         associated_user_count = sum(user.associated_uav_id >= 0 for user in users)
+        effective_covered_user_count = sum(
+            user.associated_uav_id >= 0 and user.final_rate_bps >= self.outage_threshold_bps
+            for user in users
+        )
         outage_user_count = sum(user.final_rate_bps < self.outage_threshold_bps for user in users)
 
         record = StepMetricsRecord(
             current_step=step_result.env_state.current_step,
             sum_throughput_bps=total_delivered_bits_step / config.DELTA_T,
             coverage_ratio=associated_user_count / max(len(users), 1),
+            effective_coverage_ratio=effective_covered_user_count / max(len(users), 1),
             outage_ratio=outage_user_count / max(len(users), 1),
             jain_fairness=jain_fairness_index([user.final_rate_bps for user in users]),
             total_energy_j=total_energy_j,
@@ -102,6 +109,7 @@ class MetricsCollector:
                 num_steps=0,
                 mean_sum_throughput_bps=0.0,
                 mean_coverage_ratio=0.0,
+                mean_effective_coverage_ratio=0.0,
                 mean_outage_ratio=0.0,
                 mean_jain_fairness=0.0,
                 total_energy_j=0.0,
@@ -123,6 +131,7 @@ class MetricsCollector:
             num_steps=num_steps,
             mean_sum_throughput_bps=sum(record.sum_throughput_bps for record in self.step_records) / num_steps,
             mean_coverage_ratio=sum(record.coverage_ratio for record in self.step_records) / num_steps,
+            mean_effective_coverage_ratio=sum(record.effective_coverage_ratio for record in self.step_records) / num_steps,
             mean_outage_ratio=sum(record.outage_ratio for record in self.step_records) / num_steps,
             mean_jain_fairness=sum(record.jain_fairness for record in self.step_records) / num_steps,
             total_energy_j=total_energy_j,
